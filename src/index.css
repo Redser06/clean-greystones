@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-canvas: #f8f9ff;
+  --bg-surface: #ffffff;
+  --text-primary: #0b1c30;
+  --text-secondary: #3d4a42;
+  --accent-primary: #006948;
+  --border-default: #bccac0;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.material-symbols-outlined.fill {
+  font-variation-settings: 'FILL' 1, 'wght' 600, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Remove default leaflet divIcon white box */
+.clean-gs-report-marker,
+.clean-gs-bin-marker,
+.clean-gs-draft-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+@keyframes pulseRing {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.75;
+  }
+  70% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+}
+
+.CleanGS-pulse-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  background-color: rgba(186, 26, 26, 0.45);
+  animation: pulseRing 2s infinite ease-out;
+  pointer-events: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
