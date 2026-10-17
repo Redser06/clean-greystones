@@ -129,7 +129,7 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] bg-gradient-to-t from-white via-white to-white/0 px-3 pb-3 pt-10">
         <div className="pointer-events-auto mx-auto flex max-w-md flex-col gap-2">
-          <div role="group" aria-label="Impact, optional" className="flex gap-2 overflow-x-auto">
+          <div role="group" aria-label="Impact, optional" className="flex flex-wrap gap-2">
             {IMPACTS.map(({ id, label, Icon }) => {
               const selected = impact === id;
               return (

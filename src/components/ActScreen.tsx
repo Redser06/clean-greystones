@@ -173,7 +173,7 @@ export function ActScreen({ reports, now = new Date() }: ActScreenProps) {
         <div className="space-y-1">
           <h3 className="text-sm font-semibold text-ink">Preview</h3>
           <p className="text-sm font-medium text-ink">{draft.subject}</p>
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-white p-3 font-sans text-sm leading-relaxed text-ink">
+          <pre className="whitespace-pre-wrap rounded-xl border border-line bg-white p-3 font-sans text-sm leading-relaxed text-ink">
             {draft.body}
           </pre>
         </div>
