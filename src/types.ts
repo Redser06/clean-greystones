@@ -30,6 +30,8 @@ export interface FoulingReport {
   photoDataUrl?: string;
   photoCaption?: string;
   isSeededDemo?: boolean;
+  /** Firestore and export name for the demo-seed flag. Seeded rows set this true. */
+  is_seeded_demo?: boolean;
 }
 
 export type BinKind = 'general' | 'dog_waste' | 'bag_dispenser' | 'recycling';

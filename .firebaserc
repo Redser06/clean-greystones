@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "rapid-prototyping-4134c"
+  },
+  "targets": {
+    "rapid-prototyping-4134c": {
+      "hosting": {
+        "clean-prod": ["clean-greystones"],
+        "clean-demo": ["clean-greystones-demo"],
+        "roads-prod": ["greystones-roads"],
+        "roads-demo": ["greystones-roads-demo"]
+      }
+    }
   }
 }

@@ -5,16 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/tests/*.test.ts"
+    "lint": "eslint src backend",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p backend/tsconfig.json",
+    "test": "node --import tsx --test src/tests/*.test.ts backend/tests/unit/*.test.ts",
+    "test:rules": "firebase emulators:exec --only firestore,storage --project demo-clean-greystones \"node --import tsx --test backend/tests/rules.test.ts\""
   },
   "dependencies": {
     "leaflet": "^1.9.4",
     "lucide-react": "^0.475.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "firebase": "^11.10.0"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.16",
@@ -25,8 +28,15 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.5.2",
     "tailwindcss": "^3.4.17",
+    "@eslint/js": "^10.0.1",
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "firebase-tools": "^14.12.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vite": "^6.1.0"
+    "typescript-eslint": "^8.71.2",
+    "vite": "^6.1.0",
+    "zod": "^4.1.11"
   }
 }

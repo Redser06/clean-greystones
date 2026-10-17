@@ -1,0 +1,38 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isTownAdmin(townId) {
+      return signedIn()
+        && request.auth.token.keys().hasAll(['admin'])
+        && request.auth.token.admin is map
+        && request.auth.token.admin.keys().hasAll(['towns'])
+        && request.auth.token.admin.towns is list
+        && townId in request.auth.token.admin.towns;
+    }
+
+    match /modes/{mode}/towns/{townId}/apps/{appId}/reports/{reportId}/{fileName} {
+      allow read: if signedIn() && (
+        resource.metadata.ownerUid == request.auth.uid
+        || isTownAdmin(townId)
+      );
+      allow create: if signedIn()
+        && (mode == 'demo' || mode == 'prod')
+        && (appId == 'litter' || appId == 'roads')
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)')
+        && request.resource.metadata.ownerUid == request.auth.uid
+        && request.resource.metadata.mode == mode
+        && request.resource.metadata.townId == townId
+        && request.resource.metadata.appId == appId;
+      allow update, delete: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

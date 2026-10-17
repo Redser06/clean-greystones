@@ -1,19 +1,17 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { CivicAppStream, FoulingReport } from '../types';
 import { computeBinsVsFoulingAnalysis } from '../utils/graphEngine';
+import { isDemo } from '../config/mode';
+import { town } from '../config/town';
+import { useCivicAuth } from '../auth/useCivicAuth';
 import {
   AppStreamFilter,
   computeTemporalAndSeasonalModel,
-  DEFAULT_ADMIN_PASSCODE,
   exportReportsToCsv,
   getReportSeverityDisplay,
-  HISTORICAL_DOG_FOULING_COHORT,
-  HISTORICAL_ROADS_COHORT,
   inferReportAppStream,
-  isAdminSessionActive,
   isValidAnyCivicToken,
-  setAdminSessionActive,
-  verifyAdminPasscode,
+  withSampleMarker,
 } from '../utils/adminAnalytics';
 
 interface AdminBackendViewProps {
@@ -66,11 +64,34 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
     }
   };
 
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() =>
-    isAdminSessionActive()
-  );
+  const civicAuth = useCivicAuth();
+  const [demoPreview, setDemoPreview] = useState(false);
+  const isAuthenticated = civicAuth.isAdmin(town.id) || (isDemo && demoPreview);
   const [passcodeInput, setPasscodeInput] = useState<string>('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [demoCohorts, setDemoCohorts] = useState<{ fouling: FoulingReport[]; roads: FoulingReport[] }>({
+    fouling: [],
+    roads: [],
+  });
+
+  useEffect(() => {
+    if (!isDemo) return;
+    let cancelled = false;
+    void import('../utils/demoCohorts').then((mod) => {
+      if (cancelled) return;
+      void mod.DEMO_COHORT_FINGERPRINT;
+      setDemoCohorts({
+        fouling: mod.HISTORICAL_DOG_FOULING_COHORT,
+        roads: mod.HISTORICAL_ROADS_COHORT,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const foulingCohort = demoCohorts.fouling;
+  const roadsCohort = demoCohorts.roads;
 
   const [datasetScope, setDatasetScope] = useState<'full_12m' | 'live_only'>('full_12m');
   const [activeTab, setActiveTab] = useState<AdminTab>('seasonality');
@@ -81,18 +102,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (verifyAdminPasscode(passcodeInput)) {
-      setAdminSessionActive(true);
-      setIsAuthenticated(true);
-      setLoginError(null);
-    } else {
-      setLoginError('Invalid admin passcode. Use GREYSTONES-MD-2026.');
-    }
+    void civicAuth.signInWithGoogle().then((result) => {
+      if (result.ok) setLoginError(null);
+      else setLoginError(result.message ?? 'Admin sign-in is unavailable.');
+    });
   };
 
   const handleLogout = () => {
-    setAdminSessionActive(false);
-    setIsAuthenticated(false);
+    setDemoPreview(false);
+    void civicAuth.signOut();
     setPasscodeInput('');
   };
 
@@ -110,22 +128,22 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
     const foulingPool =
       datasetScope === 'full_12m'
-        ? [...foulingLive, ...HISTORICAL_DOG_FOULING_COHORT]
+        ? [...foulingLive, ...foulingCohort]
         : foulingLive.length > 0
         ? foulingLive
-        : HISTORICAL_DOG_FOULING_COHORT.slice(-15);
+        : foulingCohort.slice(-15);
 
     const roadsPool =
       datasetScope === 'full_12m'
-        ? [...roadsLive, ...HISTORICAL_ROADS_COHORT]
+        ? [...roadsLive, ...roadsCohort]
         : roadsLive.length > 0
         ? roadsLive
-        : HISTORICAL_ROADS_COHORT.slice(-15);
+        : roadsCohort.slice(-15);
 
     if (appFilter === 'clean_greystones') return foulingPool;
     if (appFilter === 'greystones_roads') return roadsPool;
     return [...foulingPool, ...roadsPool];
-  }, [liveReports, hostStream, datasetScope, appFilter]);
+  }, [liveReports, hostStream, datasetScope, appFilter, foulingCohort, roadsCohort]);
 
   const appCountsSummary = useMemo(() => {
     const taggedLive = liveReports.map((r) => ({
@@ -134,16 +152,16 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
     }));
     const foulingTotal =
       (hostStream === 'clean_greystones' ? taggedLive.length : 0) +
-      (datasetScope === 'full_12m' ? HISTORICAL_DOG_FOULING_COHORT.length : hostStream === 'clean_greystones' ? 0 : 15);
+      (datasetScope === 'full_12m' ? foulingCohort.length : hostStream === 'clean_greystones' ? 0 : 15);
     const roadsTotal =
       (hostStream === 'greystones_roads' ? taggedLive.length : 0) +
-      (datasetScope === 'full_12m' ? HISTORICAL_ROADS_COHORT.length : hostStream === 'greystones_roads' ? 0 : 15);
+      (datasetScope === 'full_12m' ? roadsCohort.length : hostStream === 'greystones_roads' ? 0 : 15);
     return {
       foulingTotal,
       roadsTotal,
       allTotal: foulingTotal + roadsTotal,
     };
-  }, [liveReports, hostStream, datasetScope]);
+  }, [liveReports, hostStream, datasetScope, foulingCohort, roadsCohort]);
 
   const combinedDataset = useMemo(() => {
     return appScopedPool.filter((r) => {
@@ -193,7 +211,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   };
 
   const handleDownloadJsonModel = () => {
-    const payload = {
+    const payload = withSampleMarker({
       exportedAt: new Date().toISOString(),
       appFilter,
       datasetScope,
@@ -201,7 +219,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
       temporalAndSeasonalModel: model,
       recordsCount: combinedDataset.length,
       records: combinedDataset,
-    };
+    });
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json',
     });
@@ -300,16 +318,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 Sign In to Common Civic Backend
               </button>
 
-              <div className="pt-3 border-t border-line flex items-center justify-between gap-2">
-                <span className="text-[11px] text-muted font-mono">
-                  Key: <strong className="text-ink">{DEFAULT_ADMIN_PASSCODE}</strong>
-                </span>
+              <div className="pt-3 border-t border-line flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => {
-                    setPasscodeInput(DEFAULT_ADMIN_PASSCODE);
-                    setAdminSessionActive(true);
-                    setIsAuthenticated(true);
+                    if (isDemo) {
+                      setDemoPreview(true);
+                      return;
+                    }
+                    void civicAuth.signInWithGoogle();
                   }}
                   className="text-xs font-semibold text-primary hover:underline"
                 >

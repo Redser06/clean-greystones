@@ -5,9 +5,10 @@ import {
   GREYSTONES_COUNCILLORS,
   HANSARD_RECORDS,
   INITIAL_PUBLIC_BINS,
-  INITIAL_REPORTS,
   VERIFIED_CITATIONS,
 } from './data/greystonesData';
+import { countForEvidence } from './data/evidence';
+import { isDemo } from './config/mode';
 import {
   EmailTemplateId,
   FoulingReport,
@@ -73,7 +74,7 @@ export function App() {
   const [hamburgerOpen, setHamburgerOpen] = useState<boolean>(false);
   const [hamburgerPage, setHamburgerPage] = useState<HamburgerPage>('none');
 
-  const [reports, setReports] = useState<FoulingReport[]>(INITIAL_REPORTS);
+  const [reports, setReports] = useState<FoulingReport[]>([]);
   const [bins] = useState<PublicBin[]>(INITIAL_PUBLIC_BINS);
 
   // Unique provable anonymous device token (no logins, no PII)
@@ -109,7 +110,7 @@ export function App() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<EmailTemplateId>('bin_mythbuster');
   const [residentSignOff, setResidentSignOff] = useState<string>('A Greystones resident');
   const [emailCopiedToast, setEmailCopiedToast] = useState<string>('');
-  const [emailsPreparedCount, setEmailsPreparedCount] = useState<number>(42);
+  const [emailsPreparedCount, setEmailsPreparedCount] = useState<number>(isDemo ? 42 : 0);
 
   // Background Bins-vs-Fouling & Hotspot Intelligence (Node N10)
   const analysis = useMemo(() => computeBinsVsFoulingAnalysis(reports), [reports]);
@@ -149,9 +150,15 @@ export function App() {
       dBinAllM: nearest.dBinAllM,
       dBinVerifiedM: nearest.dBinVerifiedM,
       isSeededDemo: false,
+      is_seeded_demo: false,
     };
 
     setReports((prev) => [newReport, ...prev]);
+    if (!isDemo) {
+      void import('./data/civicBackend').then((mod) => {
+        void mod.submitResidentReport(newReport);
+      });
+    }
     setSelectedReport(newReport);
     setLastLoggedReport(newReport);
     setOptionalNote('');
@@ -254,11 +261,36 @@ export function App() {
   };
 
   const handleRestoreSeededDemoData = () => {
-    setReports((prev) => {
-      const userLogged = prev.filter((r) => !r.isSeededDemo);
-      return [...userLogged, ...INITIAL_REPORTS];
+    if (!isDemo) return;
+    void import('./data/demoSeeds').then((mod) => {
+      void mod.DEMO_SEED_FINGERPRINT;
+      setReports((prev) => {
+        const userLogged = prev.filter((report) => !report.isSeededDemo && report.is_seeded_demo !== true);
+        return [...userLogged, ...mod.INITIAL_REPORTS];
+      });
     });
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (isDemo) {
+      void import('./data/demoSeeds').then((mod) => {
+        if (cancelled) return;
+        void mod.DEMO_SEED_FINGERPRINT;
+        setReports(mod.INITIAL_REPORTS);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    void import('./data/civicBackend').then(async (mod) => {
+      const loaded = await mod.loadResidentReports();
+      if (!cancelled) setReports(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Email Builder (Graph Node E1 + N9 + N10)
   const currentTemplate = useMemo(
@@ -284,18 +316,25 @@ export function App() {
       selectedCcIds.includes(c.id)
     ).map((c) => c.email);
 
+    let evidenceCount: number;
+    try {
+      evidenceCount = countForEvidence(reports, submitterToken);
+    } catch {
+      evidenceCount = analysis.totalActiveReports;
+    }
+
     const topHotspot = analysis.nearBinHotspots[0]?.areaName ?? 'South Beach Promenade';
     const focusReport = selectedReport ?? lastLoggedReport ?? reports[0];
 
-    let subject = `Dog Fouling in Greystones — ${analysis.totalActiveReports} Mapped Reports (${analysis.nearBin50mPct}% Within 50m of a Bin)`;
+    let subject = `Dog Fouling in Greystones — ${evidenceCount} Mapped Reports (${analysis.nearBin50mPct}% Within 50m of a Bin)`;
     let introParagraph = `I am writing as a resident of Greystones, Co. Wicklow to raise urgent frustration over the volume and frequency of dog fouling across our footpaths, seafront promenade, and public spaces.`;
 
     if (selectedTemplateId === 'bin_mythbuster') {
       subject = `Greystones Dog Fouling Evidence: ${analysis.nearBin50mPct}% of Mapped Fouling Occurs Within 50m of a Public Bin`;
-      introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${analysis.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
+      introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${evidenceCount} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${analysis.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
     } else if (selectedTemplateId === 'wheel_contamination') {
       subject = `Footpath Accessibility Hazard: ${analysis.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
-      introParagraph = `Residents have logged ${analysis.totalActiveReports} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
+      introParagraph = `Residents have logged ${evidenceCount} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
     } else if (selectedTemplateId === 'request_bin') {
       subject = `Request for Dog-Waste Bins on Unserved Greystones Walking Routes (>200m from any bin)`;
       introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit shows 0 dedicated dog-waste bins in the town and >200m bin gaps on outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
@@ -319,7 +358,7 @@ export function App() {
 ${introParagraph}
 
 SUMMARY OF MAPPED GREYSTONES EVIDENCE:
-• Active Geo-Tagged Reports: ${analysis.totalActiveReports} incidents across ${analysis.distinctSubmitters} distinct anonymous resident tokens
+• Active Geo-Tagged Reports: ${evidenceCount} incidents across ${analysis.distinctSubmitters} distinct anonymous resident tokens
 • Bin Proximity (Background Audit): ${analysis.nearBin15mPct}% (${analysis.nearBin15mCount} reports) are within 15m of a bin; ${analysis.nearBin50mPct}% are within 50m of a bin.
 • Direct Wheel & Shoe Impact: ${analysis.highImpactCount} incidents (${analysis.highImpactPct}%) involved wheelchair wheels (${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (${analysis.bySeverity.stepped_in.count}).
 • Primary Hotspot Beside Bins: ${topHotspot}

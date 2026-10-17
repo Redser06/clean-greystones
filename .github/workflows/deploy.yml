@@ -1,0 +1,90 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-prod:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        if: ${{ !cancelled() }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: ${{ !cancelled() }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Prod hosting
+        if: ${{ !cancelled() }}
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          CIVIC_HOSTING_TARGET: prod
+        run: |
+          if [ -z "${FIREBASE_SERVICE_ACCOUNT}" ]; then
+            echo "SKIP deploy: FIREBASE_SERVICE_ACCOUNT secret is absent."
+            exit 0
+          fi
+          if [ "${VITE_DEMO}" = "true" ]; then
+            echo "Refusing prod deploy because VITE_DEMO=true."
+            exit 1
+          fi
+          unset VITE_DEMO
+          echo "CI is green on ${{ github.event.workflow_run.head_sha }}. Deploying prod hosting targets only."
+          npm ci
+          npm run build
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
+          npx firebase deploy --only hosting:clean-prod,hosting:roads-prod --project rapid-prototyping-4134c --non-interactive
+
+  deploy-demo-preview:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        if: ${{ !cancelled() }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: ${{ !cancelled() }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Demo preview channel
+        if: ${{ !cancelled() }}
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          CIVIC_HOSTING_TARGET: demo
+          VITE_DEMO: 'true'
+        run: |
+          if [ -z "${FIREBASE_SERVICE_ACCOUNT}" ]; then
+            echo "SKIP deploy: FIREBASE_SERVICE_ACCOUNT secret is absent."
+            exit 0
+          fi
+          echo "PR preview deploys only to the clean-demo hosting target."
+          npm ci
+          npm run build -- --mode demo
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
+          npx firebase hosting:channel:deploy "pr-${{ github.event.pull_request.number }}" --only clean-demo --expires 7d --project rapid-prototyping-4134c --non-interactive

@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isMode(mode) {
+      return mode == 'demo' || mode == 'prod';
+    }
+
+    function isApp(appId) {
+      return appId == 'litter' || appId == 'roads';
+    }
+
+    function isTownAdmin(townId) {
+      return signedIn()
+        && request.auth.token.keys().hasAll(['admin'])
+        && request.auth.token.admin is map
+        && request.auth.token.admin.keys().hasAll(['towns'])
+        && request.auth.token.admin.towns is list
+        && townId in request.auth.token.admin.towns;
+    }
+
+    function scoped(data, mode, townId, appId) {
+      return isMode(mode)
+        && isApp(appId)
+        && data.mode == mode
+        && data.townId == townId
+        && data.appId == appId
+        && data.townId.matches('^[a-z0-9]+(?:-[a-z0-9]+)*$');
+    }
+
+    function validReport(data, mode, townId, appId) {
+      return scoped(data, mode, townId, appId)
+        && data.is_seeded_demo == false
+        && data.authorUid == request.auth.uid
+        && data.lat is number
+        && data.lat >= -90
+        && data.lat <= 90
+        && data.lng is number
+        && data.lng >= -180
+        && data.lng <= 180
+        && data.severity in ['just_poop', 'stepped_in', 'buggy_wheels', 'wheelchair_wheels']
+        && data.createdAt is timestamp
+        && data.status in ['spotted', 'stale', 'pending', 'merged']
+        && data.submitterToken is string
+        && data.submitterToken.size() > 0
+        && data.submitterToken.size() <= 64
+        && (!('note' in data) || (data.note is string && data.note.size() <= 500))
+        && data.keys().hasOnly([
+          'mode', 'townId', 'appId', 'is_seeded_demo', 'authorUid', 'lat', 'lng',
+          'severity', 'createdAt', 'status', 'submitterToken', 'note'
+        ]);
+    }
+
+    function ratePath(mode, townId, appId) {
+      return /databases/$(database)/documents/modes/$(mode)/towns/$(townId)/apps/$(appId)/rateLimits/$(request.auth.uid);
+    }
+
+    function rateAllows(mode, townId, appId) {
+      let path = ratePath(mode, townId, appId);
+      let after = getAfter(path);
+      let fresh = !exists(path) || get(path).data.windowStart < request.time - duration.value(1, 'h');
+      return after.data.uid == request.auth.uid
+        && after.data.count is int
+        && after.data.count >= 1
+        && after.data.count <= 8
+        && after.data.windowStart is timestamp
+        && (
+          (fresh && after.data.count == 1 && after.data.windowStart == request.time)
+          || (!fresh
+            && after.data.count == get(path).data.count + 1
+            && after.data.windowStart == get(path).data.windowStart)
+        );
+    }
+
+    match /modes/{mode}/towns/{townId}/apps/{appId}/reports/{reportId} {
+      allow read: if signedIn() && (
+        resource.data.authorUid == request.auth.uid
+        || isTownAdmin(townId)
+      );
+      allow create: if signedIn()
+        && validReport(request.resource.data, mode, townId, appId)
+        && rateAllows(mode, townId, appId);
+      allow update, delete: if false;
+    }
+
+    match /modes/{mode}/towns/{townId}/apps/{appId}/aggregates/{aggregateId} {
+      allow read: if isTownAdmin(townId);
+      allow write: if false;
+    }
+
+    match /modes/{mode}/towns/{townId}/apps/{appId}/rateLimits/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.count is int
+        && request.resource.data.count >= 1
+        && request.resource.data.count <= 8
+        && request.resource.data.windowStart is timestamp
+        && request.resource.data.keys().hasOnly(['uid', 'count', 'windowStart']);
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
