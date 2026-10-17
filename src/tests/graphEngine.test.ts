@@ -10,6 +10,13 @@ import {
   selectVerifiedCitations,
 } from '../utils/graphEngine';
 import {
+  computeTemporalAndSeasonalModel,
+  DEFAULT_ADMIN_PASSCODE,
+  exportReportsToCsv,
+  HISTORICAL_GREYSTONES_COHORT,
+  verifyAdminPasscode,
+} from '../utils/adminAnalytics';
+import {
   GREYSTONES_COUNCILLORS,
   INITIAL_PUBLIC_BINS,
   INITIAL_REPORTS,
@@ -91,4 +98,33 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.ok(emails.includes('lfenelongaskin@wicklowcoco.ie'));
     assert.ok(emails.includes('mbarry@wicklowcoco.ie'));
   });
+
+  it('computes 12-month Admin Time-Series, Seasonality (year-round structural), Weekend Spike, and Diurnal model', () => {
+    const fullCohort = [...INITIAL_REPORTS, ...HISTORICAL_GREYSTONES_COHORT];
+    const model = computeTemporalAndSeasonalModel(fullCohort);
+
+    assert.equal(model.totalAnalyzed, fullCohort.length);
+    assert.equal(model.monthlySeries.length, 12, 'Expected 12 monthly buckets from Nov 2025 to Oct 2026');
+    assert.equal(model.isYearRoundStructural, true, 'Expected year-round structural baseline verdict');
+    assert.ok(
+      model.winterToSummerRatioPct >= 75,
+      `Expected Winter rate to retain >=75% of Summer rate, got ${model.winterToSummerRatioPct}%`
+    );
+    assert.ok(
+      model.weekendSpikeMultiplier >= 1.4,
+      `Expected a measurable weekend spike multiplier >= 1.4x, got ${model.weekendSpikeMultiplier}x`
+    );
+    assert.equal(model.validTokenPct, 100, 'Expected 100% valid GS-ANON cryptograms in cohort');
+  });
+
+  it('verifies admin passcode and exports RFC-4180 CSV with all required columns', () => {
+    assert.equal(verifyAdminPasscode(DEFAULT_ADMIN_PASSCODE), true);
+    assert.equal(verifyAdminPasscode('wrong-passcode'), false);
+
+    const csv = exportReportsToCsv(INITIAL_REPORTS);
+    const lines = csv.trim().split('\n');
+    assert.equal(lines.length, INITIAL_REPORTS.length + 1);
+    assert.ok(lines[0].includes('submitter_token,token_checksum_valid'));
+  });
 });
+

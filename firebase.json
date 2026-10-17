@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "clean-greystones",
     "public": "dist",
     "ignore": [
       "firebase.json",

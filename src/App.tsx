@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   COUNCIL_CC_CONTACTS,
   EMAIL_TEMPLATES,
@@ -25,11 +25,50 @@ import {
   selectVerifiedCitations,
 } from './utils/graphEngine';
 import { GreystonesMapView } from './components/GreystonesMapView';
+import { AdminBackendView } from './components/AdminBackendView';
 
 type BottomNavTab = 'map' | 'insights' | 'council';
 type HamburgerPage = 'none' | 'bins_stats' | 'legal_bylaws' | 'watchdog' | 'data_admin';
 
 export function App() {
+  const [isAdminRoute, setIsAdminRoute] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.location.pathname.startsWith('/admin') ||
+      window.location.hash === '#admin'
+    );
+  });
+
+  useEffect(() => {
+    const syncRoute = () => {
+      setIsAdminRoute(
+        window.location.pathname.startsWith('/admin') ||
+          window.location.hash === '#admin'
+      );
+    };
+    window.addEventListener('popstate', syncRoute);
+    window.addEventListener('hashchange', syncRoute);
+    return () => {
+      window.removeEventListener('popstate', syncRoute);
+      window.removeEventListener('hashchange', syncRoute);
+    };
+  }, []);
+
+  const enterAdminPortal = () => {
+    setHamburgerOpen(false);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', '/admin');
+    }
+    setIsAdminRoute(true);
+  };
+
+  const exitAdminPortal = () => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', '/');
+    }
+    setIsAdminRoute(false);
+  };
+
   const [activeTab, setActiveTab] = useState<BottomNavTab>('map');
   const [hamburgerOpen, setHamburgerOpen] = useState<boolean>(false);
   const [hamburgerPage, setHamburgerPage] = useState<HamburgerPage>('none');
@@ -350,6 +389,32 @@ ${residentSignOff}
     setHamburgerOpen(false);
   };
 
+  const handleDeleteSingleReport = (reportId: string) => {
+    setReports((prev) => prev.filter((r) => r.id !== reportId));
+    if (selectedReport?.id === reportId) setSelectedReport(null);
+    if (lastLoggedReport?.id === reportId) setLastLoggedReport(null);
+  };
+
+  const handleToggleDemoSeedsFromAdmin = () => {
+    if (hasDemoSeeds) {
+      handleClearSeededDemoData();
+    } else {
+      handleRestoreSeededDemoData();
+    }
+  };
+
+  if (isAdminRoute) {
+    return (
+      <AdminBackendView
+        liveReports={reports}
+        demoSeedCleared={!hasDemoSeeds}
+        onToggleClearDemoSeed={handleToggleDemoSeedsFromAdmin}
+        onDeleteReport={handleDeleteSingleReport}
+        onExitAdmin={exitAdminPortal}
+      />
+    );
+  }
+
   return (
     <div className="min-h-full h-full flex flex-col bg-canvas text-ink font-sans select-none">
       {/* Compact Professional Top Header */}
@@ -519,6 +584,29 @@ ${residentSignOff}
                     </p>
                     <p className="text-xs text-muted">
                       Clear pre-seeded demo pins for production or export GeoJSON/CSV
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={enterAdminPortal}
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-canvas hover:bg-white text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-ink mt-0.5">
+                    lock
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm font-semibold text-ink">
+                        Admin Backend & Time-Series Lab
+                      </p>
+                      <span className="text-[10px] font-mono bg-ink text-white px-1.5 py-0.2 rounded">
+                        /admin
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted">
+                      Organiser login: 12-month seasonality, weekend spikes & diurnal curve
                     </p>
                   </div>
                 </button>
