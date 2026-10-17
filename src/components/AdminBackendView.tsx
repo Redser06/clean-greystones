@@ -339,7 +339,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
       <header className="bg-white border-b border-line sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-3 sm:px-6 py-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 rounded-lg bg-ink text-white flex items-center justify-center font-bold text-xs shrink-0">
+            <div
+              className={`w-7 h-7 rounded-lg text-white flex items-center justify-center font-bold text-xs shrink-0 ${
+                isAllView
+                  ? 'bg-ink'
+                  : isRoadsView
+                  ? 'bg-[#8c1d18]'
+                  : 'bg-[#006948]'
+              }`}
+            >
               {isAllView ? 'GM' : isRoadsView ? 'GR' : 'CG'}
             </div>
             <div className="min-w-0">
@@ -351,7 +359,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                     ? 'Fix Greystones Roads Admin'
                     : 'Clean Greystones Admin'}
                 </span>
-                <span className="hidden sm:inline-block text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary text-white font-semibold">
+                <span
+                  className={`hidden sm:inline-block text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded text-white font-semibold ${
+                    isAllView
+                      ? 'bg-ink'
+                      : isRoadsView
+                      ? 'bg-[#8c1d18]'
+                      : 'bg-[#006948]'
+                  }`}
+                >
                   Common Portal
                 </span>
               </div>
@@ -392,7 +408,9 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               onClick={() => setActiveTab(t.id)}
               className={`px-3 py-2 text-xs font-semibold border-b-2 transition whitespace-nowrap shrink-0 ${
                 activeTab === t.id
-                  ? 'border-primary text-primary'
+                  ? isRoadsView
+                    ? 'border-[#8c1d18] text-[#8c1d18]'
+                    : 'border-[#006948] text-[#006948]'
                   : 'border-transparent text-muted hover:text-ink'
               }`}
             >
@@ -404,7 +422,11 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
       {exportToast && (
         <div className="max-w-6xl mx-auto px-4 sm:px-6 mt-3">
-          <div className="p-2.5 rounded-xl bg-primary text-white text-xs font-semibold flex items-center justify-between shadow-sm">
+          <div
+            className={`p-2.5 rounded-xl text-white text-xs font-semibold flex items-center justify-between shadow-sm ${
+              isRoadsView ? 'bg-[#8c1d18]' : 'bg-[#006948]'
+            }`}
+          >
             <span>✓ {exportToast}</span>
             <button
               type="button"
@@ -422,7 +444,11 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
         <section className="bg-white rounded-2xl border border-line p-3 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2.5 border-b border-line">
             <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-primary font-semibold">
+              <span
+                className={`text-[10px] font-mono uppercase tracking-wider font-semibold ${
+                  isRoadsView ? 'text-[#8c1d18]' : 'text-[#006948]'
+                }`}
+              >
                 Filter Common Backend by App Stream
               </span>
               <h2 className="text-xs sm:text-sm font-bold text-ink">
@@ -436,7 +462,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 onClick={() => handleSelectAppFilter('clean_greystones')}
                 className={`px-3 py-2 rounded-xl text-xs font-semibold border text-left flex items-center justify-between gap-2 transition ${
                   appFilter === 'clean_greystones'
-                    ? 'bg-primary text-white border-primary shadow-xs'
+                    ? 'bg-[#006948] text-white border-[#006948] shadow-xs'
                     : 'bg-canvas text-ink border-line hover:bg-white'
                 }`}
               >
@@ -448,7 +474,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                   className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                     appFilter === 'clean_greystones'
                       ? 'bg-white/20 text-white'
-                      : 'bg-white text-muted border border-line'
+                      : 'bg-emerald-50 text-[#006948] border border-emerald-200'
                   }`}
                 >
                   {appCountsSummary.foulingTotal}
@@ -460,7 +486,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 onClick={() => handleSelectAppFilter('greystones_roads')}
                 className={`px-3 py-2 rounded-xl text-xs font-semibold border text-left flex items-center justify-between gap-2 transition ${
                   appFilter === 'greystones_roads'
-                    ? 'bg-primary text-white border-primary shadow-xs'
+                    ? 'bg-[#8c1d18] text-white border-[#8c1d18] shadow-xs'
                     : 'bg-canvas text-ink border-line hover:bg-white'
                 }`}
               >
@@ -472,7 +498,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                   className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                     appFilter === 'greystones_roads'
                       ? 'bg-white/20 text-white'
-                      : 'bg-white text-muted border border-line'
+                      : 'bg-red-50 text-[#8c1d18] border border-red-200'
                   }`}
                 >
                   {appCountsSummary.roadsTotal}
@@ -543,7 +569,11 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadJsonModel}
-                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-primary hover:bg-primary-container text-white transition"
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg text-white transition ${
+                  isRoadsView
+                    ? 'bg-[#8c1d18] hover:bg-[#6e1410]'
+                    : 'bg-[#006948] hover:bg-[#00855d]'
+                }`}
               >
                 ⬇ JSON
               </button>
@@ -787,12 +817,18 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                           <div className="w-full h-28 flex items-end justify-center">
                             <div
                               style={{ height: `${heightPct}%` }}
-                              className="w-full max-w-[30px] rounded-t-lg bg-primary relative overflow-hidden transition-all"
+                              className={`w-full max-w-[30px] rounded-t-lg relative overflow-hidden transition-all ${
+                                isRoadsView
+                                  ? 'bg-[#8c1d18]'
+                                  : 'bg-[#006948]'
+                              }`}
                               title={`${m.label}: ${m.count} total (${m.foulingCount} fouling, ${m.roadsCount} roads), ${m.highImpactCount} high-impact`}
                             >
                               <div
                                 style={{ height: `${highPct}%` }}
-                                className="w-full bg-error bottom-0 absolute left-0"
+                                className={`w-full bottom-0 absolute left-0 ${
+                                  isRoadsView ? 'bg-[#450a0a]' : 'bg-error'
+                                }`}
                               />
                             </div>
                           </div>
@@ -1124,7 +1160,13 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                           {c.token}
                         </td>
                         <td className="py-2 pr-3">
-                          <span className="px-2 py-0.5 rounded bg-canvas border border-line text-[10px] font-semibold">
+                          <span
+                            className={`px-2 py-0.5 rounded border text-[10px] font-semibold ${
+                              c.appStream === 'greystones_roads'
+                                ? 'bg-red-50 text-[#8c1d18] border-red-200'
+                                : 'bg-emerald-50 text-[#006948] border-emerald-200'
+                            }`}
+                          >
                             {c.appStream === 'greystones_roads'
                               ? '🕳️ Fix Roads'
                               : '💩 Clean GS'}
@@ -1132,7 +1174,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                         </td>
                         <td className="py-2 pr-3">
                           {c.isValidChecksum ? (
-                            <span className="text-primary font-semibold">✓ Valid</span>
+                            <span
+                              className={`font-semibold ${
+                                c.appStream === 'greystones_roads'
+                                  ? 'text-[#8c1d18]'
+                                  : 'text-[#006948]'
+                              }`}
+                            >
+                              ✓ Valid
+                            </span>
                           ) : (
                             <span className="text-error font-semibold">Invalid</span>
                           )}
@@ -1210,8 +1260,8 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
                               stream === 'greystones_roads'
-                                ? 'bg-amber-50 text-amber-900 border-amber-200'
-                                : 'bg-emerald-50 text-primary border-emerald-200'
+                                ? 'bg-red-50 text-[#8c1d18] border-red-200'
+                                : 'bg-emerald-50 text-[#006948] border-emerald-200'
                             }`}
                           >
                             {stream === 'greystones_roads' ? '🕳️ Roads' : '💩 Fouling'}
