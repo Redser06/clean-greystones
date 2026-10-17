@@ -254,109 +254,71 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
   return (
     <div className="min-h-screen bg-canvas text-ink flex flex-col">
-      {/* Top Admin Header */}
-      <header className="bg-white border-b border-line sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-primary text-white flex items-center justify-center font-bold text-sm">
+      {/* Compact Sticky Top Bar + Single-Line Scrollable Tab Strip (never obscures mobile viewport) */}
+      <header className="bg-white border-b border-line sticky top-0 z-30 shadow-2xs">
+        <div className="max-w-7xl mx-auto px-3.5 sm:px-6 py-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-primary text-white flex items-center justify-center font-bold text-xs shrink-0">
               CG
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-bold text-sm sm:text-base text-ink tracking-tight">
-                  Clean Greystones — Admin Data & Time-Series Lab
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <h1 className="font-bold text-sm sm:text-base text-ink tracking-tight truncate">
+                  Admin Time-Series Lab
                 </h1>
-                <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-primary/10 text-primary font-semibold">
+                <span className="hidden sm:inline-block text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-primary/10 text-primary font-semibold shrink-0">
                   Authenticated
                 </span>
               </div>
-              <p className="text-xs text-muted">
-                Range: <span className="font-mono">{model.dateRangeLabel}</span> ·{' '}
-                <strong className="text-ink">{model.totalAnalyzed}</strong> geo-tagged
-                incidents across{' '}
+              <p className="text-[11px] text-muted truncate">
+                <strong className="text-ink">{model.totalAnalyzed}</strong> incidents ·{' '}
                 <strong className="text-ink">{model.submitterCohorts.length}</strong>{' '}
-                verified <span className="font-mono">GS-ANON</span> tokens
+                <span className="font-mono">GS-ANON</span> tokens
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Dataset Scope Switcher */}
-            <div className="inline-flex rounded-xl bg-canvas p-1 border border-line text-xs">
-              <button
-                type="button"
-                onClick={() => setDatasetScope('full_12m')}
-                className={`px-2.5 py-1 rounded-lg font-semibold transition ${
-                  datasetScope === 'full_12m'
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'text-muted hover:text-ink'
-                }`}
-              >
-                12-Month Model ({liveReports.length + HISTORICAL_GREYSTONES_COHORT.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setDatasetScope('live_only')}
-                className={`px-2.5 py-1 rounded-lg font-semibold transition ${
-                  datasetScope === 'live_only'
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'text-muted hover:text-ink'
-                }`}
-              >
-                Current Map Pins Only ({liveReports.length})
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleDownloadCsv}
-              className="px-3 py-1.5 rounded-xl border border-line bg-white hover:bg-canvas text-xs font-semibold text-ink transition"
-            >
-              ↓ Export CSV
-            </button>
-            <button
-              type="button"
-              onClick={handleDownloadJsonModel}
-              className="px-3 py-1.5 rounded-xl border border-line bg-white hover:bg-canvas text-xs font-semibold text-ink transition"
-            >
-              ↓ Export Model JSON
-            </button>
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={onExitAdmin}
-              className="px-3 py-1.5 rounded-xl bg-ink text-white text-xs font-semibold hover:opacity-90 transition"
+              className="px-2.5 py-1.5 rounded-lg bg-ink text-white text-xs font-semibold hover:opacity-90 transition"
             >
-              ← Public Map
+              ← Map
             </button>
             <button
               type="button"
               onClick={handleLogout}
-              className="px-2.5 py-1.5 rounded-xl border border-line text-xs font-semibold text-muted hover:text-error transition"
+              className="px-2.5 py-1.5 rounded-lg border border-line bg-white text-xs font-semibold text-muted hover:text-error transition"
             >
-              Sign Out
+              Exit
             </button>
           </div>
         </div>
 
-        {/* Sub-navigation & Global Filters */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 border-t border-line bg-canvas/60 flex flex-wrap items-center justify-between gap-3">
-          <nav className="flex flex-wrap items-center gap-1">
+        {/* Single-Row Horizontal Scrollable Module Tabs */}
+        <div className="max-w-7xl mx-auto px-3.5 sm:px-6 py-1.5 border-t border-line bg-canvas/80 overflow-x-auto no-scrollbar">
+          <nav className="flex items-center gap-1.5 whitespace-nowrap min-w-max">
             {[
               {
                 id: 'seasonality' as AdminTab,
-                label: '1. Time-Series & Seasonality Model',
+                shortLabel: '1. Seasonality',
+                fullLabel: '1. Time-Series & Seasonality',
               },
               {
                 id: 'diurnal' as AdminTab,
-                label: '2. Weekend & Time-of-Day Spikes',
+                shortLabel: '2. Weekend & Hours',
+                fullLabel: '2. Weekend & Time-of-Day Spikes',
               },
               {
                 id: 'cohorts' as AdminTab,
-                label: '3. Submitter Cryptograms & Zones',
+                shortLabel: '3. Tokens & Zones',
+                fullLabel: '3. Submitter Cryptograms & Zones',
               },
               {
                 id: 'ledger' as AdminTab,
-                label: `4. Raw Incident Ledger (${combinedDataset.length})`,
+                shortLabel: `4. Ledger (${combinedDataset.length})`,
+                fullLabel: `4. Raw Incident Ledger (${combinedDataset.length})`,
               },
             ].map((t) => (
               <button
@@ -365,44 +327,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 onClick={() => setActiveTab(t.id)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                   activeTab === t.id
-                    ? 'bg-white text-primary border border-line shadow-sm'
-                    : 'text-muted hover:text-ink'
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'bg-white/80 text-muted hover:text-ink border border-line/70'
                 }`}
               >
-                {t.label}
+                <span className="sm:hidden">{t.shortLabel}</span>
+                <span className="hidden sm:inline">{t.fullLabel}</span>
               </button>
             ))}
           </nav>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <select
-              aria-label="Filter by Greystones Zone"
-              value={zoneFilter}
-              onChange={(e) => setZoneFilter(e.target.value)}
-              className="px-2.5 py-1 rounded-lg border border-line bg-white text-ink font-medium text-xs"
-            >
-              <option value="ALL">All Greystones Zones</option>
-              {availableZones.map((z) => (
-                <option key={z} value={z}>
-                  {z}
-                </option>
-              ))}
-            </select>
-
-            <select
-              aria-label="Filter by Impact Severity"
-              value={severityFilter}
-              onChange={(e) => setSeverityFilter(e.target.value)}
-              className="px-2.5 py-1 rounded-lg border border-line bg-white text-ink font-medium text-xs"
-            >
-              <option value="ALL">All Severities</option>
-              {(Object.keys(SEVERITY_META) as SeverityType[]).map((s) => (
-                <option key={s} value={s}>
-                  {SEVERITY_META[s].label}
-                </option>
-              ))}
-            </select>
-          </div>
         </div>
       </header>
 
@@ -412,166 +345,242 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
         </div>
       )}
 
-      {/* Main Content */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 flex-1 space-y-6">
-        {/* Top Executive KPI Strip */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white rounded-2xl border border-line p-4">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
-              1. Seasonality Verdict
+      {/* Main Scrollable Content */}
+      <main className="max-w-7xl w-full mx-auto px-3.5 sm:px-6 py-4 sm:py-6 flex-1 space-y-4 sm:space-y-6">
+        {/* Scrollable Dataset Scope, Filters & Export Toolbar (scrolls naturally with page) */}
+        <section className="bg-white rounded-2xl border border-line p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-xl bg-canvas p-1 border border-line text-xs w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setDatasetScope('full_12m')}
+                className={`flex-1 sm:flex-initial px-2.5 py-1.5 rounded-lg font-semibold transition ${
+                  datasetScope === 'full_12m'
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'text-muted hover:text-ink'
+                }`}
+              >
+                12-Month Model ({liveReports.length + HISTORICAL_GREYSTONES_COHORT.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatasetScope('live_only')}
+                className={`flex-1 sm:flex-initial px-2.5 py-1.5 rounded-lg font-semibold transition ${
+                  datasetScope === 'live_only'
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'text-muted hover:text-ink'
+                }`}
+              >
+                Live Map Pins ({liveReports.length})
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto text-xs">
+              <select
+                aria-label="Filter by Greystones Zone"
+                value={zoneFilter}
+                onChange={(e) => setZoneFilter(e.target.value)}
+                className="px-2.5 py-1.5 rounded-xl border border-line bg-canvas text-ink font-medium text-xs truncate"
+              >
+                <option value="ALL">All Zones</option>
+                {availableZones.map((z) => (
+                  <option key={z} value={z}>
+                    {z}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                aria-label="Filter by Impact Severity"
+                value={severityFilter}
+                onChange={(e) => setSeverityFilter(e.target.value)}
+                className="px-2.5 py-1.5 rounded-xl border border-line bg-canvas text-ink font-medium text-xs truncate"
+              >
+                <option value="ALL">All Severities</option>
+                {(Object.keys(SEVERITY_META) as SeverityType[]).map((s) => (
+                  <option key={s} value={s}>
+                    {SEVERITY_META[s].shortLabel}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDownloadCsv}
+              className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl border border-line bg-canvas hover:bg-line/40 text-xs font-semibold text-ink transition text-center"
+            >
+              ↓ Export CSV
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadJsonModel}
+              className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl border border-line bg-canvas hover:bg-line/40 text-xs font-semibold text-ink transition text-center"
+            >
+              ↓ Model JSON
+            </button>
+          </div>
+        </section>
+
+        {/* Top Executive KPI Strip (2x2 on mobile, 4-col on desktop) */}
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
+            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
+              1. Seasonality
             </span>
-            <p className="text-lg font-bold text-ink mt-1">
+            <p className="text-sm sm:text-lg font-bold text-ink mt-1 leading-snug">
               {model.isYearRoundStructural
-                ? 'Year-Round Structural'
-                : 'Short Window Snapshot'}
+                ? 'Year-Round Baseline'
+                : 'Short Snapshot'}
             </p>
-            <p className="text-xs text-muted mt-1">
-              Winter retains{' '}
-              <strong className="text-ink">{model.winterToSummerRatioPct}%</strong> of
-              Summer volume (CV{' '}
-              <span className="font-mono">
-                {model.seasonalityCoefficientOfVariation}
-              </span>
-              )
+            <p className="text-[11px] sm:text-xs text-muted mt-1">
+              Winter = <strong className="text-ink">{model.winterToSummerRatioPct}%</strong>{' '}
+              of Summer (CV <span className="font-mono">{model.seasonalityCoefficientOfVariation}</span>)
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-line p-4">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
-              2. Weekend Spike Multiplier
+          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
+            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
+              2. Weekend Spike
             </span>
-            <p className="text-lg font-bold text-primary mt-1">
+            <p className="text-sm sm:text-lg font-bold text-primary mt-1 leading-snug">
               {model.weekendSpikeMultiplier}× Sat–Sun Rate
             </p>
-            <p className="text-xs text-muted mt-1">
-              <strong className="text-ink">{model.weekendAvgPerDay}</strong>/day on
-              weekends vs <strong className="text-ink">{model.weekdayAvgPerDay}</strong>
-              /day Mon–Fri (Peak: {model.peakDayLabel})
+            <p className="text-[11px] sm:text-xs text-muted mt-1">
+              <strong className="text-ink">{model.weekendAvgPerDay}</strong>/d wknd vs{' '}
+              <strong className="text-ink">{model.weekdayAvgPerDay}</strong>/d wkday
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-line p-4">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
-              3. Peak Time-of-Day Window
+          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
+            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
+              3. Peak Hours
             </span>
-            <p className="text-lg font-bold text-ink mt-1">
+            <p className="text-sm sm:text-lg font-bold text-ink mt-1 leading-snug">
               {model.peakDiurnalWindow?.hoursLabel ?? '09:00 – 11:59'}
             </p>
-            <p className="text-xs text-muted mt-1">
-              Top 2 windows capture{' '}
-              <strong className="text-ink">{model.topTwoWindowsCapturePct}%</strong> of
-              all incidents
+            <p className="text-[11px] sm:text-xs text-muted mt-1">
+              Top 2 windows ={' '}
+              <strong className="text-ink">{model.topTwoWindowsCapturePct}%</strong> of pins
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-line p-4">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
-              4. Near-Bin Myth-Buster
+          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
+            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
+              4. Bin Proximity
             </span>
-            <p className="text-lg font-bold text-ink mt-1">
-              {spatialSummary.nearBin50mPct}% ≤50m of a Bin
+            <p className="text-sm sm:text-lg font-bold text-ink mt-1 leading-snug">
+              {spatialSummary.nearBin50mPct}% ≤50m of Bin
             </p>
-            <p className="text-xs text-muted mt-1">
-              <strong className="text-ink">{spatialSummary.nearBin15mPct}%</strong> within
-              15m · <strong className="text-ink">{model.validTokenPct}%</strong> valid
-              cryptograms
+            <p className="text-[11px] sm:text-xs text-muted mt-1">
+              <strong className="text-ink">{spatialSummary.nearBin15mPct}%</strong> ≤15m ·{' '}
+              <strong className="text-ink">{model.validTokenPct}%</strong> valid IDs
             </p>
           </div>
         </section>
 
         {/* TAB 1: TIME-SERIES & SEASONALITY MODEL */}
         {activeTab === 'seasonality' && (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             {/* Seasonality Assessment Banner */}
-            <div className="bg-white rounded-2xl border border-line p-5 sm:p-6">
-              <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="bg-white rounded-2xl border border-line p-4 sm:p-6 overflow-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div className="max-w-3xl">
-                  <span className="inline-block text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
+                  <span className="inline-block text-[10px] sm:text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
                     MODEL QUESTION 1 · IS IT SEASONAL OR YEAR-ROUND?
                   </span>
-                  <h2 className="text-base sm:text-lg font-bold text-ink">
+                  <h2 className="text-base sm:text-lg font-bold text-ink leading-snug">
                     {model.seasonalityHeadline}
                   </h2>
                   <p className="text-xs sm:text-sm text-muted mt-1.5 leading-relaxed">
                     {model.seasonalityExplanation}
                   </p>
                 </div>
-                <div className="bg-canvas rounded-xl border border-line px-4 py-3 text-right">
-                  <span className="block text-[11px] font-mono text-muted">
+                <div className="bg-canvas rounded-xl border border-line px-3.5 py-2.5 flex sm:flex-col items-center sm:items-end justify-between shrink-0">
+                  <span className="text-[10px] font-mono text-muted">
                     WEEKLY RUN RATE
                   </span>
-                  <span className="text-xl font-bold font-mono text-ink">
+                  <span className="text-base sm:text-xl font-bold font-mono text-ink">
                     {model.weeklyRateAvg} / wk
-                  </span>
-                  <span className="block text-[11px] text-muted mt-0.5">
-                    Mean across {model.monthlySeries.length} months
                   </span>
                 </div>
               </div>
 
-              {/* 12-Month Time-Series Bar Chart */}
-              <div className="mt-6 pt-5 border-t border-line">
-                <div className="flex items-center justify-between mb-3">
+              {/* 12-Month Time-Series Bar Chart (Horizontally scrollable on narrow screens so 12 bars never wrap or collide) */}
+              <div className="mt-5 pt-4 border-t border-line">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
-                    Monthly Incident Time-Series (Total vs High-Impact Wheelchair/Buggy/Shoe)
+                    12-Month Incident Series (Swipe ↔ on mobile)
                   </h3>
-                  <div className="flex items-center gap-4 text-[11px] text-muted">
+                  <div className="flex items-center gap-3 text-[11px] text-muted">
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-primary inline-block" />
-                      Total Monthly Incidents
+                      <span className="w-2.5 h-2.5 rounded-xs bg-primary inline-block" />
+                      Total Monthly
                     </span>
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-tertiary inline-block" />
+                      <span className="w-2.5 h-2.5 rounded-xs bg-tertiary inline-block" />
                       High-Impact (Wheel/Shoe)
                     </span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-6 sm:grid-cols-12 gap-2 items-end h-48 pt-6 pb-2 px-2 bg-canvas rounded-xl border border-line">
-                  {model.monthlySeries.map((m) => {
-                    const heightPct = Math.max(
-                      12,
-                      Math.round((m.count / maxMonthCount) * 100)
-                    );
-                    const highPct =
-                      m.count > 0
-                        ? Math.round((m.highImpactCount / m.count) * 100)
-                        : 0;
-                    return (
-                      <div
-                        key={m.monthKey}
-                        className="flex flex-col items-center h-full justify-end group"
-                      >
-                        <span className="text-[11px] font-mono font-bold text-ink mb-1">
-                          {m.count}
-                        </span>
-                        <div className="w-full max-w-[34px] bg-line/50 rounded-t-md h-32 flex items-end overflow-hidden">
-                          <div
-                            style={{ height: `${heightPct}%` }}
-                            className="w-full bg-primary rounded-t-md relative flex flex-col justify-end transition-all"
-                            title={`${m.label}: ${m.count} incidents (${m.highImpactCount} high-impact, ${m.nearBin50mPct}% ≤50m of bin)`}
-                          >
+                <div className="overflow-x-auto pb-1">
+                  <div
+                    style={{
+                      gridTemplateColumns: `repeat(${Math.max(
+                        model.monthlySeries.length,
+                        4
+                      )}, minmax(44px, 1fr))`,
+                    }}
+                    className="grid gap-2 items-end bg-canvas rounded-xl border border-line p-3"
+                  >
+                    {model.monthlySeries.map((m) => {
+                      const heightPct = Math.max(
+                        14,
+                        Math.round((m.count / maxMonthCount) * 100)
+                      );
+                      const highPct =
+                        m.count > 0
+                          ? Math.round((m.highImpactCount / m.count) * 100)
+                          : 0;
+                      return (
+                        <div
+                          key={m.monthKey}
+                          className="flex flex-col items-center justify-end"
+                        >
+                          <span className="text-[11px] font-mono font-bold text-ink mb-1">
+                            {m.count}
+                          </span>
+                          <div className="w-full max-w-[32px] bg-line/60 rounded-t-md h-28 flex items-end overflow-hidden">
                             <div
-                              style={{ height: `${highPct}%` }}
-                              className="w-full bg-tertiary/90"
-                            />
+                              style={{ height: `${heightPct}%` }}
+                              className="w-full bg-primary rounded-t-md flex flex-col justify-end transition-all"
+                              title={`${m.label}: ${m.count} incidents (${m.highImpactCount} high-impact, ${m.nearBin50mPct}% ≤50m of bin)`}
+                            >
+                              <div
+                                style={{ height: `${highPct}%` }}
+                                className="w-full bg-tertiary/90"
+                              />
+                            </div>
                           </div>
+                          <span className="text-[10px] font-mono text-ink font-medium mt-1.5 whitespace-nowrap">
+                            {m.label}
+                          </span>
+                          <span className="text-[9px] font-mono text-primary whitespace-nowrap">
+                            {m.nearBin50mPct}% bin
+                          </span>
                         </div>
-                        <span className="text-[10px] font-mono text-muted mt-1.5 truncate">
-                          {m.label}
-                        </span>
-                        <span className="text-[9px] font-mono text-primary">
-                          {m.nearBin50mPct}% bin
-                        </span>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* 4-Quarter Seasonal Index Table */}
-            <div className="bg-white rounded-2xl border border-line p-5 sm:p-6">
+            {/* 4-Quarter Seasonal Index Table (2x2 on mobile, 4-col on desktop) */}
+            <div className="bg-white rounded-2xl border border-line p-4 sm:p-6">
               <h3 className="text-sm font-bold text-ink">
                 Quarterly Seasonal Index Decomposition (1.00 = Annual Monthly Mean)
               </h3>
@@ -581,28 +590,30 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 tourism.
               </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-4">
                 {model.seasonalBreakdown.map((s) => (
                   <div
                     key={s.season}
-                    className="rounded-xl border border-line bg-canvas p-4 flex flex-col justify-between"
+                    className="rounded-xl border border-line bg-canvas p-3.5 sm:p-4 flex flex-col justify-between"
                   >
                     <div>
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-1">
                         <span className="text-xs font-bold text-ink">{s.season}</span>
-                        <span className="text-[11px] font-mono text-muted">
+                        <span className="text-[10px] font-mono text-muted">
                           {s.monthsLabel}
                         </span>
                       </div>
-                      <p className="text-2xl font-bold font-mono text-ink mt-2">
+                      <p className="text-xl sm:text-2xl font-bold font-mono text-ink mt-2">
                         {s.avgPerMonth}
                         <span className="text-xs font-normal text-muted"> / mo</span>
                       </p>
                     </div>
-                    <div className="mt-3 pt-2.5 border-t border-line flex items-center justify-between text-xs">
-                      <span className="text-muted">Total: {s.count} ({s.sharePct}%)</span>
+                    <div className="mt-3 pt-2 border-t border-line flex items-center justify-between text-[11px]">
+                      <span className="text-muted">
+                        {s.count} ({s.sharePct}%)
+                      </span>
                       <span className="font-mono font-semibold text-primary">
-                        Idx: {s.seasonalIndex.toFixed(2)}
+                        Idx {s.seasonalIndex.toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -614,11 +625,11 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
         {/* TAB 2: WEEKEND SPIKES & DIURNAL TIME-OF-DAY CURVE */}
         {activeTab === 'diurnal' && (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-4 sm:space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               {/* Day-of-Week Analysis */}
-              <div className="bg-white rounded-2xl border border-line p-5 sm:p-6">
-                <span className="inline-block text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
+              <div className="bg-white rounded-2xl border border-line p-4 sm:p-6">
+                <span className="inline-block text-[10px] sm:text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
                   MODEL QUESTION 2 · DOES IT SPIKE AT WEEKENDS?
                 </span>
                 <h2 className="text-base font-bold text-ink">
@@ -633,18 +644,18 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                   when zero council litter wardens are rostered.
                 </p>
 
-                <div className="mt-5 space-y-2.5">
+                <div className="mt-4 space-y-2">
                   {model.dayOfWeekSeries.map((d) => {
                     const widthPct = Math.max(
-                      6,
+                      8,
                       Math.round((d.count / maxDayCount) * 100)
                     );
                     return (
-                      <div key={d.shortLabel} className="flex items-center gap-3">
-                        <div className="w-12 text-xs font-mono font-semibold text-ink">
+                      <div key={d.shortLabel} className="flex items-center gap-2.5">
+                        <div className="w-11 text-xs font-mono font-semibold text-ink shrink-0">
                           {d.shortLabel}
                           {d.isWeekend && (
-                            <span className="ml-1 text-[9px] text-primary">★</span>
+                            <span className="ml-0.5 text-[9px] text-primary">★</span>
                           )}
                         </div>
                         <div className="flex-1 h-6 bg-canvas rounded-lg border border-line overflow-hidden flex items-center">
@@ -657,7 +668,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                             {d.count}
                           </div>
                         </div>
-                        <div className="w-20 text-right text-xs font-mono text-muted">
+                        <div className="w-18 text-right text-[11px] font-mono text-muted shrink-0">
                           {d.sharePct}% ({d.highImpactCount} hi)
                         </div>
                       </div>
@@ -667,8 +678,8 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               </div>
 
               {/* Diurnal Time-of-Day Windows */}
-              <div className="bg-white rounded-2xl border border-line p-5 sm:p-6">
-                <span className="inline-block text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
+              <div className="bg-white rounded-2xl border border-line p-4 sm:p-6">
+                <span className="inline-block text-[10px] sm:text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
                   MODEL QUESTION 3 · TIME-OF-DAY DIURNAL SPIKES
                 </span>
                 <h2 className="text-base font-bold text-ink">
@@ -678,7 +689,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                   {model.patrolPrescription}
                 </p>
 
-                <div className="mt-5 space-y-3">
+                <div className="mt-4 space-y-2.5">
                   {model.diurnalSeries.map((w) => {
                     const widthPct = Math.max(
                       6,
@@ -689,14 +700,14 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                         key={w.id}
                         className="p-2.5 rounded-xl bg-canvas border border-line"
                       >
-                        <div className="flex items-center justify-between text-xs mb-1.5">
-                          <div>
+                        <div className="flex flex-wrap items-center justify-between gap-1 text-xs mb-1.5">
+                          <div className="min-w-0">
                             <span className="font-mono font-bold text-ink">
                               {w.hoursLabel}
                             </span>{' '}
                             <span className="font-semibold text-ink">· {w.label}</span>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 shrink-0">
                             <span
                               className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
                                 w.patrolPriority === 'CRITICAL'
@@ -713,7 +724,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                             </span>
                           </div>
                         </div>
-                        <div className="w-full h-3 bg-white rounded-full overflow-hidden border border-line">
+                        <div className="w-full h-2.5 bg-white rounded-full overflow-hidden border border-line">
                           <div
                             style={{ width: `${widthPct}%` }}
                             className="h-full bg-primary"
@@ -730,16 +741,16 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               </div>
             </div>
 
-            {/* 24-Hour Clock Distribution */}
-            <div className="bg-white rounded-2xl border border-line p-5 sm:p-6">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            {/* 24-Hour Clock Distribution (Single-row horizontal scroll on mobile so 24 bars never wrap/collide) */}
+            <div className="bg-white rounded-2xl border border-line p-4 sm:p-6 overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                 <div>
                   <h3 className="text-sm font-bold text-ink">
-                    24-Hour Hourly Incident Histogram (UTC / Local Greystones Time)
+                    24-Hour Hourly Incident Histogram (Swipe ↔ on mobile)
                   </h3>
                   <p className="text-xs text-muted">
-                    Highlights exact patrol shift hours where warden presence yields
-                    maximum deterrence under s.22 Litter Pollution Act 1997.
+                    Exact patrol shift hours where warden presence yields maximum
+                    deterrence under s.22 Litter Pollution Act 1997.
                   </p>
                 </div>
                 <span className="text-xs font-mono text-primary font-semibold">
@@ -747,35 +758,42 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 </span>
               </div>
 
-              <div className="grid grid-cols-12 sm:grid-cols-24 gap-1.5 items-end h-36 bg-canvas p-3 rounded-xl border border-line">
-                {model.hourlyHistogram.map((h) => {
-                  const pct =
-                    h.count === 0
-                      ? 4
-                      : Math.max(12, Math.round((h.count / maxHourCount) * 100));
-                  return (
-                    <div
-                      key={h.hour}
-                      className="flex flex-col items-center justify-end h-full"
-                    >
-                      <span className="text-[9px] font-mono text-muted mb-1">
-                        {h.count > 0 ? h.count : ''}
-                      </span>
-                      <div className="w-full h-20 flex items-end bg-line/40 rounded-t">
-                        <div
-                          style={{ height: `${pct}%` }}
-                          className={`w-full rounded-t ${
-                            h.isPeak ? 'bg-primary' : 'bg-ink/60'
-                          }`}
-                          title={`${h.label} — ${h.count} incidents`}
-                        />
+              <div className="overflow-x-auto pb-1">
+                <div
+                  style={{
+                    gridTemplateColumns: 'repeat(24, minmax(22px, 1fr))',
+                  }}
+                  className="grid gap-1.5 items-end bg-canvas p-3 rounded-xl border border-line"
+                >
+                  {model.hourlyHistogram.map((h) => {
+                    const pct =
+                      h.count === 0
+                        ? 4
+                        : Math.max(12, Math.round((h.count / maxHourCount) * 100));
+                    return (
+                      <div
+                        key={h.hour}
+                        className="flex flex-col items-center justify-end"
+                      >
+                        <span className="text-[9px] font-mono text-ink font-semibold mb-1 h-3">
+                          {h.count > 0 ? h.count : ''}
+                        </span>
+                        <div className="w-full h-24 flex items-end bg-line/50 rounded-t">
+                          <div
+                            style={{ height: `${pct}%` }}
+                            className={`w-full rounded-t ${
+                              h.isPeak ? 'bg-primary' : 'bg-ink/60'
+                            }`}
+                            title={`${h.label} — ${h.count} incidents`}
+                          />
+                        </div>
+                        <span className="text-[9px] font-mono text-muted mt-1">
+                          {String(h.hour).padStart(2, '0')}
+                        </span>
                       </div>
-                      <span className="text-[9px] font-mono text-muted mt-1">
-                        {String(h.hour).padStart(2, '0')}
-                      </span>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
