@@ -13,7 +13,10 @@ import {
   computeTemporalAndSeasonalModel,
   DEFAULT_ADMIN_PASSCODE,
   exportReportsToCsv,
+  HISTORICAL_DOG_FOULING_COHORT,
   HISTORICAL_GREYSTONES_COHORT,
+  HISTORICAL_ROADS_COHORT,
+  isValidAnyCivicToken,
   verifyAdminPasscode,
 } from '../utils/adminAnalytics';
 import {
@@ -101,7 +104,7 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
 
   it('computes 12-month Admin Time-Series, Seasonality (year-round structural), Weekend Spike, and Diurnal model', () => {
     const fullCohort = [...INITIAL_REPORTS, ...HISTORICAL_GREYSTONES_COHORT];
-    const model = computeTemporalAndSeasonalModel(fullCohort);
+    const model = computeTemporalAndSeasonalModel(fullCohort, 'clean_greystones');
 
     assert.equal(model.totalAnalyzed, fullCohort.length);
     assert.equal(model.monthlySeries.length, 12, 'Expected 12 monthly buckets from Nov 2025 to Oct 2026');
@@ -117,13 +120,28 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.equal(model.validTokenPct, 100, 'Expected 100% valid GS-ANON cryptograms in cohort');
   });
 
-  it('verifies admin passcode and exports RFC-4180 CSV with all required columns', () => {
+  it('supports Common Backend Portal filtering across Clean Greystones, Fix Greystones Roads, and Combined All-App streams', () => {
+    const combinedPool = [...HISTORICAL_DOG_FOULING_COHORT, ...HISTORICAL_ROADS_COHORT];
+    const combinedModel = computeTemporalAndSeasonalModel(combinedPool, 'all');
+    assert.equal(combinedModel.foulingCount, HISTORICAL_DOG_FOULING_COHORT.length);
+    assert.equal(combinedModel.roadsCount, HISTORICAL_ROADS_COHORT.length);
+    assert.equal(combinedModel.totalAnalyzed, combinedPool.length);
+    assert.equal(combinedModel.validTokenPct, 100);
+    assert.ok(
+      combinedPool.every((r) => isValidAnyCivicToken(r.submitterToken)),
+      'Expected both GS-ANON and GR-ANON tokens to validate in common backend'
+    );
+  });
+
+  it('verifies admin passcode and exports RFC-4180 CSV with app_stream and submitter_token columns', () => {
     assert.equal(verifyAdminPasscode(DEFAULT_ADMIN_PASSCODE), true);
+    assert.equal(verifyAdminPasscode('GREYSTONES-ROADS-2026'), true);
     assert.equal(verifyAdminPasscode('wrong-passcode'), false);
 
     const csv = exportReportsToCsv(INITIAL_REPORTS);
     const lines = csv.trim().split('\n');
     assert.equal(lines.length, INITIAL_REPORTS.length + 1);
+    assert.ok(lines[0].includes('id,app_stream,created_at_utc'));
     assert.ok(lines[0].includes('submitter_token,token_checksum_valid'));
   });
 });

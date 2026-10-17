@@ -599,17 +599,34 @@ ${residentSignOff}
                   <div>
                     <div className="flex items-center gap-1.5">
                       <p className="text-sm font-semibold text-ink">
-                        Admin Backend & Time-Series Lab
+                        Common Civic Admin Backend
                       </p>
                       <span className="text-[10px] font-mono bg-ink text-white px-1.5 py-0.2 rounded">
                         /admin
                       </span>
                     </div>
                     <p className="text-xs text-muted">
-                      Organiser login: 12-month seasonality, weekend spikes & diurnal curve
+                      Unified organiser portal filtered by app (Fouling, Roads, or All)
                     </p>
                   </div>
                 </button>
+
+                <a
+                  href="https://greystones-roads.web.app"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="text-base mt-0.5">🕳️</span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">
+                      Sister App: Fix Greystones Roads
+                    </p>
+                    <p className="text-xs text-muted">
+                      Switch to greystonesroads.ie (Pothole & Utility Trench Tracker) ↗
+                    </p>
+                  </div>
+                </a>
               </nav>
             </div>
 

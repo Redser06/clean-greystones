@@ -1,15 +1,17 @@
 import React, { useMemo, useState } from 'react';
-import { FoulingReport, SeverityType } from '../types';
+import { CivicAppStream, FoulingReport } from '../types';
+import { computeBinsVsFoulingAnalysis } from '../utils/graphEngine';
 import {
-  computeBinsVsFoulingAnalysis,
-  SEVERITY_META,
-} from '../utils/graphEngine';
-import {
+  AppStreamFilter,
   computeTemporalAndSeasonalModel,
   DEFAULT_ADMIN_PASSCODE,
   exportReportsToCsv,
-  HISTORICAL_GREYSTONES_COHORT,
+  getReportSeverityDisplay,
+  HISTORICAL_DOG_FOULING_COHORT,
+  HISTORICAL_ROADS_COHORT,
+  inferReportAppStream,
   isAdminSessionActive,
+  isValidAnyCivicToken,
   setAdminSessionActive,
   verifyAdminPasscode,
 } from '../utils/adminAnalytics';
@@ -20,6 +22,7 @@ interface AdminBackendViewProps {
   onToggleClearDemoSeed: () => void;
   onDeleteReport: (id: string) => void;
   onExitAdmin: () => void;
+  defaultAppFilter?: AppStreamFilter;
 }
 
 type AdminTab = 'seasonality' | 'diurnal' | 'cohorts' | 'ledger';
@@ -30,14 +33,45 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   onToggleClearDemoSeed,
   onDeleteReport,
   onExitAdmin,
+  defaultAppFilter,
 }) => {
+  const hostStream: CivicAppStream = useMemo(() => {
+    if (defaultAppFilter && defaultAppFilter !== 'all') return defaultAppFilter;
+    if (liveReports.length > 0) return inferReportAppStream(liveReports[0]);
+    if (typeof window !== 'undefined' && window.location.hostname.includes('roads')) {
+      return 'greystones_roads';
+    }
+    return 'clean_greystones';
+  }, [defaultAppFilter, liveReports]);
+
+  const [appFilter, setAppFilter] = useState<AppStreamFilter>(() => {
+    if (typeof window !== 'undefined') {
+      const param = new URLSearchParams(window.location.search).get('app');
+      if (param === 'all' || param === 'clean_greystones' || param === 'greystones_roads') {
+        return param;
+      }
+      if (param === 'roads') return 'greystones_roads';
+      if (param === 'fouling') return 'clean_greystones';
+    }
+    return defaultAppFilter ?? hostStream;
+  });
+
+  const handleSelectAppFilter = (next: AppStreamFilter) => {
+    setAppFilter(next);
+    setZoneFilter('ALL');
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('app', next);
+      window.history.replaceState({}, '', url.toString());
+    }
+  };
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() =>
     isAdminSessionActive()
   );
   const [passcodeInput, setPasscodeInput] = useState<string>('');
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // Dataset scope: 'full_12m' combines liveReports + 12-month historical series for seasonality modelling
   const [datasetScope, setDatasetScope] = useState<'full_12m' | 'live_only'>('full_12m');
   const [activeTab, setActiveTab] = useState<AdminTab>('seasonality');
   const [zoneFilter, setZoneFilter] = useState<string>('ALL');
@@ -52,7 +86,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
       setIsAuthenticated(true);
       setLoginError(null);
     } else {
-      setLoginError('Invalid admin passcode. Use the Greystones MD organiser key.');
+      setLoginError('Invalid admin passcode. Use GREYSTONES-MD-2026.');
     }
   };
 
@@ -62,13 +96,57 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
     setPasscodeInput('');
   };
 
-  const combinedDataset = useMemo(() => {
-    const base =
-      datasetScope === 'full_12m'
-        ? [...liveReports, ...HISTORICAL_GREYSTONES_COHORT]
-        : [...liveReports];
+  // Build unified multi-app dataset before user zone/severity/search filters
+  const appScopedPool = useMemo(() => {
+    const taggedLive = liveReports.map((r) => ({
+      ...r,
+      appStream: inferReportAppStream(r),
+    }));
 
-    return base.filter((r) => {
+    const foulingLive =
+      hostStream === 'clean_greystones' ? taggedLive : [];
+    const roadsLive =
+      hostStream === 'greystones_roads' ? taggedLive : [];
+
+    const foulingPool =
+      datasetScope === 'full_12m'
+        ? [...foulingLive, ...HISTORICAL_DOG_FOULING_COHORT]
+        : foulingLive.length > 0
+        ? foulingLive
+        : HISTORICAL_DOG_FOULING_COHORT.slice(-15);
+
+    const roadsPool =
+      datasetScope === 'full_12m'
+        ? [...roadsLive, ...HISTORICAL_ROADS_COHORT]
+        : roadsLive.length > 0
+        ? roadsLive
+        : HISTORICAL_ROADS_COHORT.slice(-15);
+
+    if (appFilter === 'clean_greystones') return foulingPool;
+    if (appFilter === 'greystones_roads') return roadsPool;
+    return [...foulingPool, ...roadsPool];
+  }, [liveReports, hostStream, datasetScope, appFilter]);
+
+  const appCountsSummary = useMemo(() => {
+    const taggedLive = liveReports.map((r) => ({
+      ...r,
+      appStream: inferReportAppStream(r),
+    }));
+    const foulingTotal =
+      (hostStream === 'clean_greystones' ? taggedLive.length : 0) +
+      (datasetScope === 'full_12m' ? HISTORICAL_DOG_FOULING_COHORT.length : hostStream === 'clean_greystones' ? 0 : 15);
+    const roadsTotal =
+      (hostStream === 'greystones_roads' ? taggedLive.length : 0) +
+      (datasetScope === 'full_12m' ? HISTORICAL_ROADS_COHORT.length : hostStream === 'greystones_roads' ? 0 : 15);
+    return {
+      foulingTotal,
+      roadsTotal,
+      allTotal: foulingTotal + roadsTotal,
+    };
+  }, [liveReports, hostStream, datasetScope]);
+
+  const combinedDataset = useMemo(() => {
+    return appScopedPool.filter((r) => {
       if (zoneFilter !== 'ALL' && r.areaName !== zoneFilter) return false;
       if (severityFilter !== 'ALL' && r.severity !== severityFilter) return false;
       if (searchQuery.trim() !== '') {
@@ -81,11 +159,11 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
       }
       return true;
     });
-  }, [liveReports, datasetScope, zoneFilter, severityFilter, searchQuery]);
+  }, [appScopedPool, zoneFilter, severityFilter, searchQuery]);
 
   const model = useMemo(
-    () => computeTemporalAndSeasonalModel(combinedDataset),
-    [combinedDataset]
+    () => computeTemporalAndSeasonalModel(combinedDataset, appFilter),
+    [combinedDataset, appFilter]
   );
 
   const spatialSummary = useMemo(
@@ -95,11 +173,9 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
   const availableZones = useMemo(() => {
     const set = new Set<string>();
-    [...liveReports, ...HISTORICAL_GREYSTONES_COHORT].forEach((r) =>
-      set.add(r.areaName)
-    );
+    appScopedPool.forEach((r) => set.add(r.areaName));
     return Array.from(set).sort();
-  }, [liveReports]);
+  }, [appScopedPool]);
 
   const handleDownloadCsv = () => {
     const csv = exportReportsToCsv(combinedDataset);
@@ -107,18 +183,19 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `clean-greystones-incidents-${datasetScope}-${new Date()
+    a.download = `greystones-civic-${appFilter}-${datasetScope}-${new Date()
       .toISOString()
       .slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    setExportToast(`Exported ${combinedDataset.length} rows to CSV`);
+    setExportToast(`Exported ${combinedDataset.length} rows (${appFilter}) to CSV`);
     setTimeout(() => setExportToast(null), 3500);
   };
 
   const handleDownloadJsonModel = () => {
     const payload = {
       exportedAt: new Date().toISOString(),
+      appFilter,
       datasetScope,
       spatialSummary,
       temporalAndSeasonalModel: model,
@@ -131,14 +208,17 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `clean-greystones-timeseries-model-${new Date()
+    a.download = `greystones-civic-model-${appFilter}-${new Date()
       .toISOString()
       .slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    setExportToast('Exported full Time-Series Model + JSON dataset');
+    setExportToast(`Exported JSON Model (${appFilter})`);
     setTimeout(() => setExportToast(null), 3500);
   };
+
+  const isRoadsView = appFilter === 'greystones_roads';
+  const isAllView = appFilter === 'all';
 
   // 1. UNAUTHENTICATED LOGIN SCREEN
   if (!isAuthenticated) {
@@ -147,19 +227,19 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
         <header className="max-w-5xl w-full mx-auto flex items-center justify-between border-b border-line pb-4">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-primary text-white flex items-center justify-center font-bold text-sm shadow-sm">
-              CG
+              GM
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold text-sm tracking-tight text-ink">
-                  Clean Greystones
+                  Greystones Civic Observatory
                 </span>
                 <span className="text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded bg-ink text-white font-semibold">
-                  Admin Backend
+                  Unified /admin
                 </span>
               </div>
               <p className="text-xs text-muted">
-                Data Collection, Time-Series Modelling & Seasonality Observatory
+                Common Backend Portal · Clean Greystones (Fouling) & Fix Greystones Roads (Potholes)
               </p>
             </div>
           </div>
@@ -168,23 +248,24 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
             onClick={onExitAdmin}
             className="text-xs font-semibold text-muted hover:text-ink px-3 py-1.5 rounded-lg border border-line bg-white transition"
           >
-            ← Back to Resident Map
+            ← Back to Map
           </button>
         </header>
 
         <main className="my-auto py-8">
           <div className="max-w-md w-full mx-auto bg-white rounded-2xl border border-line shadow-sm p-6 sm:p-8">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-canvas border border-line text-[11px] font-mono font-semibold text-primary mb-4">
-              <span>🔒</span> ORGANISER AUTHENTICATION
+              <span>🔒</span> UNIFIED ORGANISER AUTHENTICATION
             </div>
             <h1 className="text-xl font-bold text-ink tracking-tight">
-              Backend Analytics & Time-Series Login
+              Greystones Civic Backend Portal
             </h1>
             <p className="text-xs text-muted mt-1.5 leading-relaxed">
-              Residents never log in to report dog fouling on the public map. This
-              separate backend portal is restricted to campaign organisers to aggregate
-              all collected records, model seasonal vs year-round baselines, and analyse
-              weekend and time-of-day spikes.
+              One shared backend portal for both Greystones citizen apps. Filter between{' '}
+              <strong>💩 Clean Greystones (Dog Fouling)</strong>,{' '}
+              <strong>🕳️ Fix Greystones Roads (Potholes)</strong>, or{' '}
+              <strong>📊 Combined Municipal District View</strong> to run 12-month seasonality,
+              weekend spike, and diurnal time-of-day models.
             </p>
 
             <form onSubmit={handleLoginSubmit} className="mt-6 space-y-4">
@@ -216,7 +297,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 type="submit"
                 className="w-full py-2.5 px-4 rounded-xl bg-primary hover:bg-primary-container text-white font-semibold text-sm transition shadow-sm"
               >
-                Sign In to Analytics Backend
+                Sign In to Common Civic Backend
               </button>
 
               <div className="pt-3 border-t border-line flex items-center justify-between gap-2">
@@ -240,41 +321,40 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
         </main>
 
         <footer className="max-w-5xl w-full mx-auto text-center text-[11px] text-muted border-t border-line pt-4">
-          Clean Greystones Civic Data Observatory · Zero-PII Cryptogram Verification (`GS-ANON-*`)
+          Greystones Municipal District Civic Observatory · Zero-PII Cryptograms (`GS-ANON-*` & `GR-ANON-*`)
         </footer>
       </div>
     );
   }
 
-  // 2. AUTHENTICATED ADMIN BACKEND DASHBOARD
+  // 2. AUTHENTICATED COMMON ADMIN BACKEND DASHBOARD
   const maxMonthCount = Math.max(...model.monthlySeries.map((m) => m.count), 1);
   const maxDayCount = Math.max(...model.dayOfWeekSeries.map((d) => d.count), 1);
   const maxDiurnalCount = Math.max(...model.diurnalSeries.map((w) => w.count), 1);
   const maxHourCount = Math.max(...model.hourlyHistogram.map((h) => h.count), 1);
 
   return (
-    <div className="min-h-screen bg-canvas text-ink flex flex-col">
-      {/* Compact Sticky Top Bar + Single-Line Scrollable Tab Strip (never obscures mobile viewport) */}
-      <header className="bg-white border-b border-line sticky top-0 z-30 shadow-2xs">
-        <div className="max-w-7xl mx-auto px-3.5 sm:px-6 py-2.5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-primary text-white flex items-center justify-center font-bold text-xs shrink-0">
-              CG
+    <div className="min-h-screen bg-canvas text-ink pb-20">
+      {/* Compact Sticky Top Bar + Scrollable Single-Line Tab Strip */}
+      <header className="bg-white border-b border-line sticky top-0 z-30">
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 py-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-ink text-white flex items-center justify-center font-bold text-xs shrink-0">
+              {isAllView ? 'GM' : isRoadsView ? 'GR' : 'CG'}
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <h1 className="font-bold text-sm sm:text-base text-ink tracking-tight truncate">
-                  Admin Time-Series Lab
-                </h1>
-                <span className="hidden sm:inline-block text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-primary/10 text-primary font-semibold shrink-0">
-                  Authenticated
+                <span className="font-bold text-xs sm:text-sm tracking-tight text-ink truncate">
+                  {isAllView
+                    ? 'Greystones Civic Admin (All Apps)'
+                    : isRoadsView
+                    ? 'Fix Greystones Roads Admin'
+                    : 'Clean Greystones Admin'}
+                </span>
+                <span className="hidden sm:inline-block text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary text-white font-semibold">
+                  Common Portal
                 </span>
               </div>
-              <p className="text-[11px] text-muted truncate">
-                <strong className="text-ink">{model.totalAnalyzed}</strong> incidents ·{' '}
-                <strong className="text-ink">{model.submitterCohorts.length}</strong>{' '}
-                <span className="font-mono">GS-ANON</span> tokens
-              </p>
             </div>
           </div>
 
@@ -282,263 +362,407 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
             <button
               type="button"
               onClick={onExitAdmin}
-              className="px-2.5 py-1.5 rounded-lg bg-ink text-white text-xs font-semibold hover:opacity-90 transition"
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-line bg-canvas hover:bg-white text-ink transition"
             >
               ← Map
             </button>
             <button
               type="button"
               onClick={handleLogout}
-              className="px-2.5 py-1.5 rounded-lg border border-line bg-white text-xs font-semibold text-muted hover:text-error transition"
+              className="px-2 py-1 text-xs font-medium text-muted hover:text-ink"
             >
-              Exit
+              Sign Out
             </button>
           </div>
         </div>
 
-        {/* Single-Row Horizontal Scrollable Module Tabs */}
-        <div className="max-w-7xl mx-auto px-3.5 sm:px-6 py-1.5 border-t border-line bg-canvas/80 overflow-x-auto no-scrollbar">
-          <nav className="flex items-center gap-1.5 whitespace-nowrap min-w-max">
-            {[
-              {
-                id: 'seasonality' as AdminTab,
-                shortLabel: '1. Seasonality',
-                fullLabel: '1. Time-Series & Seasonality',
-              },
-              {
-                id: 'diurnal' as AdminTab,
-                shortLabel: '2. Weekend & Hours',
-                fullLabel: '2. Weekend & Time-of-Day Spikes',
-              },
-              {
-                id: 'cohorts' as AdminTab,
-                shortLabel: '3. Tokens & Zones',
-                fullLabel: '3. Submitter Cryptograms & Zones',
-              },
-              {
-                id: 'ledger' as AdminTab,
-                shortLabel: `4. Ledger (${combinedDataset.length})`,
-                fullLabel: `4. Raw Incident Ledger (${combinedDataset.length})`,
-              },
-            ].map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setActiveTab(t.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  activeTab === t.id
-                    ? 'bg-primary text-white shadow-xs'
-                    : 'bg-white/80 text-muted hover:text-ink border border-line/70'
-                }`}
-              >
-                <span className="sm:hidden">{t.shortLabel}</span>
-                <span className="hidden sm:inline">{t.fullLabel}</span>
-              </button>
-            ))}
-          </nav>
+        {/* Single-line Horizontal Scrollable Tab Navigation */}
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 border-t border-line flex items-center gap-1 overflow-x-auto no-scrollbar">
+          {(
+            [
+              { id: 'seasonality', label: '1. Seasonality (12M)' },
+              { id: 'diurnal', label: '2. Weekend & Time' },
+              { id: 'cohorts', label: '3. Tokens & Zones' },
+              { id: 'ledger', label: `4. Ledger (${combinedDataset.length})` },
+            ] as { id: AdminTab; label: string }[]
+          ).map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setActiveTab(t.id)}
+              className={`px-3 py-2 text-xs font-semibold border-b-2 transition whitespace-nowrap shrink-0 ${
+                activeTab === t.id
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted hover:text-ink'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
       </header>
 
       {exportToast && (
-        <div className="bg-primary text-white text-xs font-semibold text-center py-2 px-4">
-          {exportToast}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 mt-3">
+          <div className="p-2.5 rounded-xl bg-primary text-white text-xs font-semibold flex items-center justify-between shadow-sm">
+            <span>✓ {exportToast}</span>
+            <button
+              type="button"
+              onClick={() => setExportToast(null)}
+              className="text-white/80 hover:text-white ml-4"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Main Scrollable Content */}
-      <main className="max-w-7xl w-full mx-auto px-3.5 sm:px-6 py-4 sm:py-6 flex-1 space-y-4 sm:space-y-6">
-        {/* Scrollable Dataset Scope, Filters & Export Toolbar (scrolls naturally with page) */}
-        <section className="bg-white rounded-2xl border border-line p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-xl bg-canvas p-1 border border-line text-xs w-full sm:w-auto">
+      <main className="max-w-6xl mx-auto px-3 sm:px-6 pt-3 space-y-5">
+        {/* TOP-LEVEL APP FILTER BAR (Common Backend Filtered by App) */}
+        <section className="bg-white rounded-2xl border border-line p-3 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2.5 border-b border-line">
+            <div>
+              <span className="text-[10px] font-mono uppercase tracking-wider text-primary font-semibold">
+                Filter Common Backend by App Stream
+              </span>
+              <h2 className="text-xs sm:text-sm font-bold text-ink">
+                Select Citizen App Dataset
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleSelectAppFilter('clean_greystones')}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold border text-left flex items-center justify-between gap-2 transition ${
+                  appFilter === 'clean_greystones'
+                    ? 'bg-primary text-white border-primary shadow-xs'
+                    : 'bg-canvas text-ink border-line hover:bg-white'
+                }`}
+              >
+                <span className="flex items-center gap-1.5 truncate">
+                  <span>💩</span>
+                  <span className="truncate">Clean Greystones</span>
+                </span>
+                <span
+                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                    appFilter === 'clean_greystones'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white text-muted border border-line'
+                  }`}
+                >
+                  {appCountsSummary.foulingTotal}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectAppFilter('greystones_roads')}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold border text-left flex items-center justify-between gap-2 transition ${
+                  appFilter === 'greystones_roads'
+                    ? 'bg-primary text-white border-primary shadow-xs'
+                    : 'bg-canvas text-ink border-line hover:bg-white'
+                }`}
+              >
+                <span className="flex items-center gap-1.5 truncate">
+                  <span>🕳️</span>
+                  <span className="truncate">Fix Greystones Roads</span>
+                </span>
+                <span
+                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                    appFilter === 'greystones_roads'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white text-muted border border-line'
+                  }`}
+                >
+                  {appCountsSummary.roadsTotal}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectAppFilter('all')}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold border text-left flex items-center justify-between gap-2 transition ${
+                  appFilter === 'all'
+                    ? 'bg-ink text-white border-ink shadow-xs'
+                    : 'bg-canvas text-ink border-line hover:bg-white'
+                }`}
+              >
+                <span className="flex items-center gap-1.5 truncate">
+                  <span>📊</span>
+                  <span className="truncate">All Apps (Combined)</span>
+                </span>
+                <span
+                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                    appFilter === 'all'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white text-muted border border-line'
+                  }`}
+                >
+                  {appCountsSummary.allTotal}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Cohort Scope, Zone/Severity Filters & Export Actions */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="inline-flex rounded-lg border border-line bg-canvas p-0.5">
               <button
                 type="button"
                 onClick={() => setDatasetScope('full_12m')}
-                className={`flex-1 sm:flex-initial px-2.5 py-1.5 rounded-lg font-semibold transition ${
+                className={`px-2.5 py-1 text-xs font-semibold rounded-md transition ${
                   datasetScope === 'full_12m'
-                    ? 'bg-primary text-white shadow-xs'
+                    ? 'bg-white text-ink shadow-xs'
                     : 'text-muted hover:text-ink'
                 }`}
               >
-                12-Month Model ({liveReports.length + HISTORICAL_GREYSTONES_COHORT.length})
+                12-Month Model ({appScopedPool.length})
               </button>
               <button
                 type="button"
                 onClick={() => setDatasetScope('live_only')}
-                className={`flex-1 sm:flex-initial px-2.5 py-1.5 rounded-lg font-semibold transition ${
+                className={`px-2.5 py-1 text-xs font-semibold rounded-md transition ${
                   datasetScope === 'live_only'
-                    ? 'bg-primary text-white shadow-xs'
+                    ? 'bg-white text-ink shadow-xs'
                     : 'text-muted hover:text-ink'
                 }`}
               >
-                Live Map Pins ({liveReports.length})
+                Live Session ({liveReports.length})
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto text-xs">
-              <select
-                aria-label="Filter by Greystones Zone"
-                value={zoneFilter}
-                onChange={(e) => setZoneFilter(e.target.value)}
-                className="px-2.5 py-1.5 rounded-xl border border-line bg-canvas text-ink font-medium text-xs truncate"
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleDownloadCsv}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-line bg-white hover:bg-canvas text-ink transition"
               >
-                <option value="ALL">All Zones</option>
-                {availableZones.map((z) => (
-                  <option key={z} value={z}>
-                    {z}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                aria-label="Filter by Impact Severity"
-                value={severityFilter}
-                onChange={(e) => setSeverityFilter(e.target.value)}
-                className="px-2.5 py-1.5 rounded-xl border border-line bg-canvas text-ink font-medium text-xs truncate"
+                ⬇ CSV ({combinedDataset.length})
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadJsonModel}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-primary hover:bg-primary-container text-white transition"
               >
-                <option value="ALL">All Severities</option>
-                {(Object.keys(SEVERITY_META) as SeverityType[]).map((s) => (
-                  <option key={s} value={s}>
-                    {SEVERITY_META[s].shortLabel}
-                  </option>
-                ))}
-              </select>
+                ⬇ JSON
+              </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleDownloadCsv}
-              className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl border border-line bg-canvas hover:bg-line/40 text-xs font-semibold text-ink transition text-center"
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 pt-2 border-t border-line text-xs">
+            <select
+              aria-label="Filter by Greystones zone or corridor"
+              value={zoneFilter}
+              onChange={(e) => setZoneFilter(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg border border-line bg-canvas text-ink font-medium text-xs w-full sm:w-auto"
             >
-              ↓ Export CSV
-            </button>
-            <button
-              type="button"
-              onClick={handleDownloadJsonModel}
-              className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl border border-line bg-canvas hover:bg-line/40 text-xs font-semibold text-ink transition text-center"
+              <option value="ALL">All Zones / Corridors ({availableZones.length})</option>
+              {availableZones.map((z) => (
+                <option key={z} value={z}>
+                  {z}
+                </option>
+              ))}
+            </select>
+
+            <select
+              aria-label="Filter by impact severity"
+              value={severityFilter}
+              onChange={(e) => setSeverityFilter(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg border border-line bg-canvas text-ink font-medium text-xs w-full sm:w-auto"
             >
-              ↓ Model JSON
-            </button>
+              <option value="ALL">All Severities</option>
+              {isRoadsView ? (
+                <>
+                  <option value="just_poop">🕳️ Pothole / Surface Crater</option>
+                  <option value="stepped_in">🚧 Sunken Trench / Ponding</option>
+                  <option value="buggy_wheels">🚲 Cyclist / Buggy Hazard</option>
+                  <option value="wheelchair_wheels">🛞 Tyre / Rim Strike</option>
+                </>
+              ) : isAllView ? (
+                <>
+                  <option value="just_poop">💩 / 🕳️ Standard Spotted</option>
+                  <option value="stepped_in">👟 / 🚧 Stepped In / Trench</option>
+                  <option value="buggy_wheels">👶 / 🚲 Buggy / Cyclist Hazard</option>
+                  <option value="wheelchair_wheels">♿ / 🛞 Wheelchair / Tyre Strike</option>
+                </>
+              ) : (
+                <>
+                  <option value="just_poop">💩 Dog Poop Spotted</option>
+                  <option value="stepped_in">👟 Stepped In It</option>
+                  <option value="buggy_wheels">👶 Buggy Wheels Hit</option>
+                  <option value="wheelchair_wheels">♿ Wheelchair Wheels Hit</option>
+                </>
+              )}
+            </select>
+
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search street, token, ID…"
+              className="col-span-2 sm:flex-1 min-w-[160px] px-2.5 py-1.5 rounded-lg border border-line bg-canvas text-ink text-xs"
+            />
           </div>
         </section>
 
-        {/* Top Executive KPI Strip (2x2 on mobile, 4-col on desktop) */}
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
-            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
-              1. Seasonality
+        {/* TOP EXECUTIVE SUMMARY SCORECARD */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
+              1. Seasonality Verdict
             </span>
-            <p className="text-sm sm:text-lg font-bold text-ink mt-1 leading-snug">
+            <p className="text-lg font-bold text-ink mt-1">
               {model.isYearRoundStructural
-                ? 'Year-Round Baseline'
-                : 'Short Snapshot'}
+                ? isRoadsView
+                  ? 'Trench + Winter Surge'
+                  : isAllView
+                  ? 'Year-Round + Winter Peak'
+                  : 'Year-Round Structural'
+                : 'Active Cohort'}
             </p>
-            <p className="text-[11px] sm:text-xs text-muted mt-1">
-              Winter = <strong className="text-ink">{model.winterToSummerRatioPct}%</strong>{' '}
-              of Summer (CV <span className="font-mono">{model.seasonalityCoefficientOfVariation}</span>)
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
-            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
-              2. Weekend Spike
-            </span>
-            <p className="text-sm sm:text-lg font-bold text-primary mt-1 leading-snug">
-              {model.weekendSpikeMultiplier}× Sat–Sun Rate
-            </p>
-            <p className="text-[11px] sm:text-xs text-muted mt-1">
-              <strong className="text-ink">{model.weekendAvgPerDay}</strong>/d wknd vs{' '}
-              <strong className="text-ink">{model.weekdayAvgPerDay}</strong>/d wkday
+            <p className="text-xs text-muted mt-1">
+              Winter rate is{' '}
+              <strong className="text-ink">{model.winterToSummerRatioPct}%</strong> of
+              Summer rate (CV{' '}
+              <span className="font-mono">
+                {model.seasonalityCoefficientOfVariation}
+              </span>
+              )
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
-            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
-              3. Peak Hours
+          <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
+              2. Weekend Spike Multiplier
             </span>
-            <p className="text-sm sm:text-lg font-bold text-ink mt-1 leading-snug">
-              {model.peakDiurnalWindow?.hoursLabel ?? '09:00 – 11:59'}
+            <p className="text-lg font-bold text-primary mt-1">
+              {model.weekendSpikeMultiplier}× on Sat–Sun
             </p>
-            <p className="text-[11px] sm:text-xs text-muted mt-1">
-              Top 2 windows ={' '}
-              <strong className="text-ink">{model.topTwoWindowsCapturePct}%</strong> of pins
+            <p className="text-xs text-muted mt-1">
+              Weekend avg <strong className="text-ink">{model.weekendAvgPerDay}/day</strong>{' '}
+              vs Weekday <strong className="text-ink">{model.weekdayAvgPerDay}/day</strong>
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-line p-3.5 sm:p-4">
-            <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-muted block">
-              4. Bin Proximity
+          <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
+              {isRoadsView || isAllView
+                ? '3. Logged Tyre & Rim Damage'
+                : '3. Peak Patrol Window'}
             </span>
-            <p className="text-sm sm:text-lg font-bold text-ink mt-1 leading-snug">
-              {spatialSummary.nearBin50mPct}% ≤50m of Bin
-            </p>
-            <p className="text-[11px] sm:text-xs text-muted mt-1">
-              <strong className="text-ink">{spatialSummary.nearBin15mPct}%</strong> ≤15m ·{' '}
-              <strong className="text-ink">{model.validTokenPct}%</strong> valid IDs
-            </p>
+            {isRoadsView || isAllView ? (
+              <>
+                <p className="text-lg font-bold text-error mt-1">
+                  €{model.totalDamageEuro.toLocaleString()}
+                </p>
+                <p className="text-xs text-muted mt-1">
+                  {isAllView
+                    ? `${model.foulingCount} Fouling + ${model.roadsCount} Road Defects`
+                    : `${spatialSummary.highImpactCount} high-impact strikes (${spatialSummary.highImpactPct}%)`}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-bold text-ink mt-1">
+                  {model.peakDiurnalWindow?.hoursLabel}
+                </p>
+                <p className="text-xs text-muted mt-1">
+                  Top 2 windows capture{' '}
+                  <strong className="text-ink">{model.topTwoWindowsCapturePct}%</strong> of
+                  all fouling
+                </p>
+              </>
+            )}
+          </div>
+
+          <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-muted">
+              {isRoadsView
+                ? '4. Repeat Patch Proximity'
+                : isAllView
+                ? '4. Bin / Patch Proximity (≤50m)'
+                : '4. Submitter Cryptograms'}
+            </span>
+            {isRoadsView || isAllView ? (
+              <>
+                <p className="text-lg font-bold text-ink mt-1">
+                  {spatialSummary.nearBin50mPct}% ≤50m
+                </p>
+                <p className="text-xs text-muted mt-1">
+                  <strong className="text-primary">{spatialSummary.nearBin15mPct}%</strong>{' '}
+                  within 15m •{' '}
+                  <strong className="text-ink">{model.submitterCohorts.length}</strong>{' '}
+                  tokens
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-bold text-ink mt-1">
+                  {model.submitterCohorts.length} Distinct Devices
+                </p>
+                <p className="text-xs text-muted mt-1">
+                  <strong className="text-primary">{model.validTokenPct}%</strong> valid{' '}
+                  <code className="font-mono">GS-ANON</code> checksums
+                </p>
+              </>
+            )}
           </div>
         </section>
 
-        {/* TAB 1: TIME-SERIES & SEASONALITY MODEL */}
+        {/* TAB 1: TIME-SERIES & SEASONALITY LAB */}
         {activeTab === 'seasonality' && (
-          <div className="space-y-4 sm:space-y-6">
-            {/* Seasonality Assessment Banner */}
-            <div className="bg-white rounded-2xl border border-line p-4 sm:p-6 overflow-hidden">
-              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                <div className="max-w-3xl">
-                  <span className="inline-block text-[10px] sm:text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
-                    MODEL QUESTION 1 · IS IT SEASONAL OR YEAR-ROUND?
+          <div className="space-y-6">
+            <section className="bg-white rounded-2xl border border-line p-5 sm:p-6 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 border-b border-line">
+                <div>
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                    Hypothesis Test 1 · Seasonality vs Year-Round Baseline (
+                    {isAllView
+                      ? 'All Civic Streams'
+                      : isRoadsView
+                      ? 'Fix Greystones Roads'
+                      : 'Clean Greystones'}
+                    )
                   </span>
-                  <h2 className="text-base sm:text-lg font-bold text-ink leading-snug">
+                  <h2 className="text-base sm:text-lg font-bold text-ink mt-0.5">
                     {model.seasonalityHeadline}
                   </h2>
-                  <p className="text-xs sm:text-sm text-muted mt-1.5 leading-relaxed">
-                    {model.seasonalityExplanation}
-                  </p>
                 </div>
-                <div className="bg-canvas rounded-xl border border-line px-3.5 py-2.5 flex sm:flex-col items-center sm:items-end justify-between shrink-0">
-                  <span className="text-[10px] font-mono text-muted">
-                    WEEKLY RUN RATE
-                  </span>
-                  <span className="text-base sm:text-xl font-bold font-mono text-ink">
-                    {model.weeklyRateAvg} / wk
-                  </span>
-                </div>
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-canvas border border-line text-ink">
+                  {model.dateRangeLabel}
+                </span>
               </div>
 
-              {/* 12-Month Time-Series Bar Chart (Horizontally scrollable on narrow screens so 12 bars never wrap or collide) */}
-              <div className="mt-5 pt-4 border-t border-line">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
-                    12-Month Incident Series (Swipe ↔ on mobile)
-                  </h3>
-                  <div className="flex items-center gap-3 text-[11px] text-muted">
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-xs bg-primary inline-block" />
-                      Total Monthly
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-xs bg-tertiary inline-block" />
-                      High-Impact (Wheel/Shoe)
-                    </span>
-                  </div>
+              <p className="text-xs sm:text-sm text-muted mt-3 leading-relaxed">
+                {model.seasonalityExplanation}
+              </p>
+
+              {/* 12-Month Time-Series Bar Chart (Horizontally Scrollable on Mobile) */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between text-xs text-muted mb-2">
+                  <span className="font-semibold text-ink">
+                    Monthly Incident Trajectory (
+                    {isAllView
+                      ? 'Stacked Fouling + Roads'
+                      : isRoadsView
+                      ? 'Bar = Total Defects · Top = € Damage'
+                      : 'Bar = Total · Red = Wheel/Shoe Hits'}
+                    )
+                  </span>
+                  <span className="font-mono">
+                    Avg {model.weeklyRateAvg} incidents / week
+                  </span>
                 </div>
 
-                <div className="overflow-x-auto pb-1">
+                <div className="overflow-x-auto no-scrollbar rounded-xl bg-canvas border border-line p-3">
                   <div
-                    style={{
-                      gridTemplateColumns: `repeat(${Math.max(
-                        model.monthlySeries.length,
-                        4
-                      )}, minmax(44px, 1fr))`,
-                    }}
-                    className="grid gap-2 items-end bg-canvas rounded-xl border border-line p-3"
+                    className="grid gap-2 items-end min-w-[520px] pt-4"
+                    style={{ gridTemplateColumns: 'repeat(12, minmax(38px, 1fr))' }}
                   >
                     {model.monthlySeries.map((m) => {
                       const heightPct = Math.max(
-                        14,
+                        12,
                         Math.round((m.count / maxMonthCount) * 100)
                       );
                       const highPct =
@@ -548,28 +772,32 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                       return (
                         <div
                           key={m.monthKey}
-                          className="flex flex-col items-center justify-end"
+                          className="flex flex-col items-center justify-end group"
                         >
+                          <span className="text-[9px] font-mono text-muted mb-0.5">
+                            {isRoadsView && m.damageEuroTotal > 0
+                              ? `€${Math.round(m.damageEuroTotal / 100) / 10}k`
+                              : isAllView
+                              ? `${m.foulingCount}+${m.roadsCount}`
+                              : `${m.nearBin50mPct}%`}
+                          </span>
                           <span className="text-[11px] font-mono font-bold text-ink mb-1">
                             {m.count}
                           </span>
-                          <div className="w-full max-w-[32px] bg-line/60 rounded-t-md h-28 flex items-end overflow-hidden">
+                          <div className="w-full h-28 flex items-end justify-center">
                             <div
                               style={{ height: `${heightPct}%` }}
-                              className="w-full bg-primary rounded-t-md flex flex-col justify-end transition-all"
-                              title={`${m.label}: ${m.count} incidents (${m.highImpactCount} high-impact, ${m.nearBin50mPct}% ≤50m of bin)`}
+                              className="w-full max-w-[30px] rounded-t-lg bg-primary relative overflow-hidden transition-all"
+                              title={`${m.label}: ${m.count} total (${m.foulingCount} fouling, ${m.roadsCount} roads), ${m.highImpactCount} high-impact`}
                             >
                               <div
                                 style={{ height: `${highPct}%` }}
-                                className="w-full bg-tertiary/90"
+                                className="w-full bg-error bottom-0 absolute left-0"
                               />
                             </div>
                           </div>
-                          <span className="text-[10px] font-mono text-ink font-medium mt-1.5 whitespace-nowrap">
+                          <span className="text-[10px] font-mono text-muted mt-1.5 truncate">
                             {m.label}
-                          </span>
-                          <span className="text-[9px] font-mono text-primary whitespace-nowrap">
-                            {m.nearBin50mPct}% bin
                           </span>
                         </div>
                       );
@@ -577,368 +805,345 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* 4-Quarter Seasonal Index Table (2x2 on mobile, 4-col on desktop) */}
-            <div className="bg-white rounded-2xl border border-line p-4 sm:p-6">
-              <h3 className="text-sm font-bold text-ink">
-                Quarterly Seasonal Index Decomposition (1.00 = Annual Monthly Mean)
-              </h3>
-              <p className="text-xs text-muted mt-1">
-                A seasonal index near <span className="font-mono">1.00</span> across all
-                four quarters proves year-round residency fouling rather than seasonal
-                tourism.
-              </p>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-4">
+              {/* 4-Season Comparison Cards */}
+              <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 {model.seasonalBreakdown.map((s) => (
                   <div
                     key={s.season}
-                    className="rounded-xl border border-line bg-canvas p-3.5 sm:p-4 flex flex-col justify-between"
+                    className="rounded-xl border border-line bg-canvas p-3.5 flex flex-col justify-between"
                   >
-                    <div>
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-xs font-bold text-ink">{s.season}</span>
-                        <span className="text-[10px] font-mono text-muted">
-                          {s.monthsLabel}
-                        </span>
-                      </div>
-                      <p className="text-xl sm:text-2xl font-bold font-mono text-ink mt-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-ink">{s.season}</span>
+                      <span className="text-[11px] font-mono text-muted">
+                        {s.monthsLabel}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-xl font-bold text-ink">
                         {s.avgPerMonth}
                         <span className="text-xs font-normal text-muted"> / mo</span>
-                      </p>
-                    </div>
-                    <div className="mt-3 pt-2 border-t border-line flex items-center justify-between text-[11px]">
-                      <span className="text-muted">
-                        {s.count} ({s.sharePct}%)
                       </span>
-                      <span className="font-mono font-semibold text-primary">
-                        Idx {s.seasonalIndex.toFixed(2)}
+                      <span
+                        className={`text-xs font-mono font-semibold px-1.5 py-0.5 rounded ${
+                          s.seasonalIndex >= 1.1
+                            ? 'bg-amber-100 text-amber-900'
+                            : 'bg-white text-ink border border-line'
+                        }`}
+                      >
+                        Index {s.seasonalIndex}×
                       </span>
                     </div>
+                    <p className="text-[11px] text-muted mt-1.5">
+                      {s.count} incidents ({s.sharePct}% of annual total)
+                    </p>
                   </div>
                 ))}
               </div>
-            </div>
+            </section>
           </div>
         )}
 
-        {/* TAB 2: WEEKEND SPIKES & DIURNAL TIME-OF-DAY CURVE */}
+        {/* TAB 2: WEEKEND SPIKE & DIURNAL TIME-OF-DAY CURVE */}
         {activeTab === 'diurnal' && (
-          <div className="space-y-4 sm:space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-              {/* Day-of-Week Analysis */}
-              <div className="bg-white rounded-2xl border border-line p-4 sm:p-6">
-                <span className="inline-block text-[10px] sm:text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
-                  MODEL QUESTION 2 · DOES IT SPIKE AT WEEKENDS?
+          <div className="space-y-6">
+            <section className="bg-white rounded-2xl border border-line p-5 sm:p-6 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 border-b border-line">
+                <div>
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                    Hypothesis Test 2 · Day-of-Week & Weekend Concentration
+                  </span>
+                  <h2 className="text-base sm:text-lg font-bold text-ink mt-0.5">
+                    {model.weekendHeadline}
+                  </h2>
+                </div>
+                <span className="text-xs font-mono text-muted">
+                  Peak Day: <strong className="text-ink">{model.peakDayLabel}</strong>
                 </span>
-                <h2 className="text-base font-bold text-ink">
-                  {model.weekendHeadline}
-                </h2>
-                <p className="text-xs text-muted mt-1">
-                  Saturday and Sunday generate{' '}
-                  <strong className="text-ink">{model.weekendAvgPerDay}</strong> reports
-                  per day vs{' '}
-                  <strong className="text-ink">{model.weekdayAvgPerDay}</strong> per
-                  weekday — driven by heavy weekend promenade and Harbour Marina footfall
-                  when zero council litter wardens are rostered.
-                </p>
+              </div>
 
-                <div className="mt-4 space-y-2">
-                  {model.dayOfWeekSeries.map((d) => {
-                    const widthPct = Math.max(
-                      8,
-                      Math.round((d.count / maxDayCount) * 100)
-                    );
-                    return (
-                      <div key={d.shortLabel} className="flex items-center gap-2.5">
-                        <div className="w-11 text-xs font-mono font-semibold text-ink shrink-0">
-                          {d.shortLabel}
-                          {d.isWeekend && (
-                            <span className="ml-0.5 text-[9px] text-primary">★</span>
-                          )}
-                        </div>
-                        <div className="flex-1 h-6 bg-canvas rounded-lg border border-line overflow-hidden flex items-center">
-                          <div
-                            style={{ width: `${widthPct}%` }}
-                            className={`h-full flex items-center px-2 text-[11px] font-mono font-bold text-white ${
-                              d.isWeekend ? 'bg-primary' : 'bg-ink/75'
+              <div className="mt-5 grid grid-cols-7 gap-2 sm:gap-3">
+                {model.dayOfWeekSeries.map((d) => {
+                  const barHeightPct = Math.max(
+                    14,
+                    Math.round((d.count / maxDayCount) * 100)
+                  );
+                  return (
+                    <div
+                      key={d.shortLabel}
+                      className={`rounded-xl border p-2.5 flex flex-col items-center ${
+                        d.isWeekend
+                          ? 'border-primary bg-canvas'
+                          : 'border-line bg-white'
+                      }`}
+                    >
+                      <span
+                        className={`text-xs font-bold ${
+                          d.isWeekend ? 'text-primary' : 'text-ink'
+                        }`}
+                      >
+                        {d.shortLabel}
+                      </span>
+                      <span className="text-[10px] font-mono text-muted">
+                        {d.sharePct}%
+                      </span>
+                      <div className="h-28 w-full flex items-end justify-center my-2">
+                        <div
+                          style={{ height: `${barHeightPct}%` }}
+                          className={`w-full max-w-[28px] rounded-t-md ${
+                            d.isWeekend ? 'bg-primary' : 'bg-ink/70'
+                          }`}
+                        />
+                      </div>
+                      <span className="text-xs font-mono font-bold text-ink">
+                        {d.count}
+                      </span>
+                      <span className="text-[10px] text-muted">
+                        {d.highImpactCount} high-imp
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* Diurnal Time-of-Day Curve & Operational Prescription */}
+            <section className="bg-white rounded-2xl border border-line p-5 sm:p-6 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 border-b border-line">
+                <div>
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                    Hypothesis Test 3 · Diurnal Time-of-Day Curve
+                  </span>
+                  <h2 className="text-base sm:text-lg font-bold text-ink mt-0.5">
+                    When Does Reporting Spike During the Day?
+                  </h2>
+                </div>
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-primary text-white">
+                  Top 2 Windows = {model.topTwoWindowsCapturePct}% of Reports
+                </span>
+              </div>
+
+              <div className="mt-3 p-3.5 rounded-xl bg-canvas border border-line text-xs text-ink font-medium">
+                <strong>Operational Prescription:</strong> {model.patrolPrescription}
+              </div>
+
+              {/* 6 Operational Shift Windows */}
+              <div className="mt-5 space-y-2.5">
+                {model.diurnalSeries.map((w) => {
+                  const widthPct = Math.max(
+                    4,
+                    Math.round((w.count / maxDiurnalCount) * 100)
+                  );
+                  return (
+                    <div
+                      key={w.id}
+                      className="p-3 rounded-xl border border-line bg-canvas/60"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-ink">
+                            {w.hoursLabel}
+                          </span>
+                          <span className="font-semibold text-ink">{w.label}</span>
+                          <span
+                            className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded font-bold ${
+                              w.patrolPriority === 'CRITICAL'
+                                ? 'bg-error text-white'
+                                : w.patrolPriority === 'HIGH'
+                                ? 'bg-primary text-white'
+                                : 'bg-white border border-line text-muted'
                             }`}
                           >
-                            {d.count}
-                          </div>
+                            {w.patrolPriority}
+                          </span>
                         </div>
-                        <div className="w-18 text-right text-[11px] font-mono text-muted shrink-0">
-                          {d.sharePct}% ({d.highImpactCount} hi)
+                        <div className="text-xs font-mono text-muted">
+                          <strong className="text-ink">{w.count}</strong> ({w.sharePct}%) ·
+                          Wkday {w.weekdayCount} / Wknd {w.weekendCount}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
+                      <div className="w-full h-2.5 rounded-full bg-white border border-line overflow-hidden">
+                        <div
+                          style={{ width: `${widthPct}%` }}
+                          className={`h-full rounded-full ${
+                            w.patrolPriority === 'CRITICAL'
+                              ? 'bg-error'
+                              : 'bg-primary'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Diurnal Time-of-Day Windows */}
-              <div className="bg-white rounded-2xl border border-line p-4 sm:p-6">
-                <span className="inline-block text-[10px] sm:text-[11px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded bg-primary/10 text-primary font-semibold mb-2">
-                  MODEL QUESTION 3 · TIME-OF-DAY DIURNAL SPIKES
-                </span>
-                <h2 className="text-base font-bold text-ink">
-                  Bimodal Morning Walk (07:00–11:59) & Evening Dusk (18:00–20:59) Peaks
-                </h2>
-                <p className="text-xs text-muted mt-1">
-                  {model.patrolPrescription}
-                </p>
-
-                <div className="mt-4 space-y-2.5">
-                  {model.diurnalSeries.map((w) => {
-                    const widthPct = Math.max(
-                      6,
-                      Math.round((w.count / maxDiurnalCount) * 100)
-                    );
-                    return (
-                      <div
-                        key={w.id}
-                        className="p-2.5 rounded-xl bg-canvas border border-line"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-1 text-xs mb-1.5">
-                          <div className="min-w-0">
-                            <span className="font-mono font-bold text-ink">
-                              {w.hoursLabel}
-                            </span>{' '}
-                            <span className="font-semibold text-ink">· {w.label}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span
-                              className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
-                                w.patrolPriority === 'CRITICAL'
-                                  ? 'bg-error-container text-on-error-container'
-                                  : w.patrolPriority === 'HIGH'
-                                  ? 'bg-primary/15 text-primary'
-                                  : 'bg-line text-muted'
+              {/* 24-Hour Fine-Grained Histogram */}
+              <div className="mt-6">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-muted mb-2">
+                  24-Hour Fine-Grained Reporting Curve (00:00 – 23:00)
+                </h3>
+                <div className="overflow-x-auto no-scrollbar rounded-xl bg-canvas border border-line p-3">
+                  <div
+                    className="grid gap-1.5 items-end min-w-[560px]"
+                    style={{ gridTemplateColumns: 'repeat(24, minmax(20px, 1fr))' }}
+                  >
+                    {model.hourlyHistogram.map((h) => {
+                      const hPct =
+                        h.count === 0
+                          ? 4
+                          : Math.max(12, Math.round((h.count / maxHourCount) * 100));
+                      return (
+                        <div
+                          key={h.hour}
+                          className="flex flex-col items-center justify-end"
+                          title={`${h.label} — ${h.count} incidents`}
+                        >
+                          <span className="text-[9px] font-mono text-muted mb-0.5">
+                            {h.count > 0 ? h.count : ''}
+                          </span>
+                          <div className="w-full h-20 flex items-end justify-center">
+                            <div
+                              style={{ height: `${hPct}%` }}
+                              className={`w-full rounded-t ${
+                                h.isPeak ? 'bg-primary' : 'bg-ink/40'
                               }`}
-                            >
-                              {w.patrolPriority}
-                            </span>
-                            <span className="font-mono font-bold text-ink">
-                              {w.count} ({w.sharePct}%)
-                            </span>
+                            />
                           </div>
+                          <span className="text-[9px] font-mono text-muted mt-1">
+                            {String(h.hour).padStart(2, '0')}
+                          </span>
                         </div>
-                        <div className="w-full h-2.5 bg-white rounded-full overflow-hidden border border-line">
-                          <div
-                            style={{ width: `${widthPct}%` }}
-                            className="h-full bg-primary"
-                          />
-                        </div>
-                        <div className="flex justify-between text-[10px] font-mono text-muted mt-1">
-                          <span>Weekday: {w.weekdayCount}</span>
-                          <span>Weekend: {w.weekendCount}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
-
-            {/* 24-Hour Clock Distribution (Single-row horizontal scroll on mobile so 24 bars never wrap/collide) */}
-            <div className="bg-white rounded-2xl border border-line p-4 sm:p-6 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                <div>
-                  <h3 className="text-sm font-bold text-ink">
-                    24-Hour Hourly Incident Histogram (Swipe ↔ on mobile)
-                  </h3>
-                  <p className="text-xs text-muted">
-                    Exact patrol shift hours where warden presence yields maximum
-                    deterrence under s.22 Litter Pollution Act 1997.
-                  </p>
-                </div>
-                <span className="text-xs font-mono text-primary font-semibold">
-                  Optimal Warden Shift: 08:00–11:00 & 17:30–19:30
-                </span>
-              </div>
-
-              <div className="overflow-x-auto pb-1">
-                <div
-                  style={{
-                    gridTemplateColumns: 'repeat(24, minmax(22px, 1fr))',
-                  }}
-                  className="grid gap-1.5 items-end bg-canvas p-3 rounded-xl border border-line"
-                >
-                  {model.hourlyHistogram.map((h) => {
-                    const pct =
-                      h.count === 0
-                        ? 4
-                        : Math.max(12, Math.round((h.count / maxHourCount) * 100));
-                    return (
-                      <div
-                        key={h.hour}
-                        className="flex flex-col items-center justify-end"
-                      >
-                        <span className="text-[9px] font-mono text-ink font-semibold mb-1 h-3">
-                          {h.count > 0 ? h.count : ''}
-                        </span>
-                        <div className="w-full h-24 flex items-end bg-line/50 rounded-t">
-                          <div
-                            style={{ height: `${pct}%` }}
-                            className={`w-full rounded-t ${
-                              h.isPeak ? 'bg-primary' : 'bg-ink/60'
-                            }`}
-                            title={`${h.label} — ${h.count} incidents`}
-                          />
-                        </div>
-                        <span className="text-[9px] font-mono text-muted mt-1">
-                          {String(h.hour).padStart(2, '0')}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
+            </section>
           </div>
         )}
 
-        {/* TAB 3: SUBMITTER CRYPTOGRAMS & SPATIAL ZONES */}
+        {/* TAB 3: SUBMITTER CRYPTOGRAM COHORTS & SPATIAL AUDIT */}
         {activeTab === 'cohorts' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Spatial Hotspots & Bin Distance Table */}
-            <div className="bg-white rounded-2xl border border-line p-5 sm:p-6">
-              <h2 className="text-base font-bold text-ink">
-                Spatial Zone & Bin Proximity Breakdown
-              </h2>
-              <p className="text-xs text-muted mt-1">
-                Separates seafront/town zones (where bins are &lt;15m away and
-                enforcement is the gap) from outer estates (&gt;200m from any bin).
-              </p>
+          <div className="space-y-6">
+            <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="bg-white rounded-2xl border border-line p-5 shadow-xs">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                  Spatial Infrastructure Audit
+                </span>
+                <h3 className="text-base font-bold text-ink mt-0.5">
+                  {isRoadsView
+                    ? 'Repeat Patch Washout vs Unpatched Outer Roads'
+                    : isAllView
+                    ? 'Combined Proximity Audit (Bins & Road Patches)'
+                    : 'Seafront Enforcement Gap vs Outer Walk Bin Deficit'}
+                </h3>
+                <div className="mt-4 space-y-2.5 text-xs">
+                  <div className="p-3 rounded-xl bg-canvas border border-line flex items-center justify-between">
+                    <span>
+                      {isRoadsView
+                        ? 'Within 15m of a Prior Patch / Trench'
+                        : 'Within 15m of a Public Bin / Prior Patch'}
+                    </span>
+                    <strong className="font-mono text-sm text-primary">
+                      {spatialSummary.nearBin15mCount} ({spatialSummary.nearBin15mPct}%)
+                    </strong>
+                  </div>
+                  <div className="p-3 rounded-xl bg-canvas border border-line flex items-center justify-between">
+                    <span>
+                      {isRoadsView
+                        ? 'Within 50m of a Prior Patch / Trench'
+                        : 'Within 50m of a Public Bin / Prior Patch'}
+                    </span>
+                    <strong className="font-mono text-sm text-ink">
+                      {spatialSummary.nearBin50mCount} ({spatialSummary.nearBin50mPct}%)
+                    </strong>
+                  </div>
+                  <div className="p-3 rounded-xl bg-canvas border border-line flex items-center justify-between">
+                    <span>
+                      {isRoadsView
+                        ? 'Unpatched Outer Roads (>100m from prior works)'
+                        : 'Unserved Outer Routes (>200m)'}
+                    </span>
+                    <strong className="font-mono text-sm text-error">
+                      {spatialSummary.gt200mCount} ({spatialSummary.gt200mPct}%)
+                    </strong>
+                  </div>
+                </div>
+              </div>
 
-              <div className="mt-4 overflow-x-auto">
+              <div className="bg-white rounded-2xl border border-line p-5 shadow-xs">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                  Anti-Astroturfing & Cryptogram Integrity
+                </span>
+                <h3 className="text-base font-bold text-ink mt-0.5">
+                  Submitter Token Distribution (`GS-ANON` & `GR-ANON`)
+                </h3>
+                <p className="text-xs text-muted mt-1">
+                  Proves to Wicklow County Council that reports originate from broad
+                  community participation rather than a single device spamming the map.
+                </p>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-canvas border border-line">
+                    <span className="text-muted block">Distinct Devices</span>
+                    <strong className="text-lg font-bold text-ink">
+                      {model.submitterCohorts.length}
+                    </strong>
+                  </div>
+                  <div className="p-3 rounded-xl bg-canvas border border-line">
+                    <span className="text-muted block">Valid Checksums</span>
+                    <strong className="text-lg font-bold text-primary">
+                      {model.validTokenPct}%
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Submitter Cohort Table */}
+            <section className="bg-white rounded-2xl border border-line p-5 shadow-xs">
+              <h3 className="text-sm font-bold text-ink mb-3">
+                Top Anonymous Resident Submitter Tokens ({model.submitterCohorts.length}{' '}
+                total)
+              </h3>
+              <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
-                    <tr className="border-b border-line text-[11px] font-mono uppercase text-muted">
-                      <th className="py-2 pr-2">Zone</th>
-                      <th className="py-2 px-2">Incidents</th>
-                      <th className="py-2 px-2">Min Dist to Bin</th>
-                      <th className="py-2 px-2">Nearest Bin</th>
-                      <th className="py-2 pl-2">Diagnosis</th>
+                    <tr className="border-b border-line text-muted font-mono uppercase text-[10px]">
+                      <th className="py-2 pr-3">Submitter Token</th>
+                      <th className="py-2 pr-3">App Stream</th>
+                      <th className="py-2 pr-3">Checksum</th>
+                      <th className="py-2 pr-3">Reports</th>
+                      <th className="py-2 pr-3">Damage (€)</th>
+                      <th className="py-2 pr-3">Zones / Corridors</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line">
-                    {[
-                      ...spatialSummary.nearBinHotspots,
-                      ...spatialSummary.farFromBinHotspots,
-                    ].map((h) => {
-                      const binLabel: string =
-                        'nearestBinCode' in h && typeof h.nearestBinCode === 'string'
-                          ? h.nearestBinCode
-                          : 'Unserved (>200m)';
-                      return (
-                        <tr key={h.areaName}>
-                          <td className="py-2.5 pr-2 font-semibold text-ink">
-                            {h.areaName}
-                          </td>
-                          <td className="py-2.5 px-2 font-mono font-bold text-ink">
-                            {h.count}
-                          </td>
-                          <td className="py-2.5 px-2 font-mono">
-                            {h.minBinDistM}m
-                          </td>
-                          <td className="py-2.5 px-2 font-mono text-muted">
-                            {binLabel}
-                          </td>
-                          <td className="py-2.5 pl-2">
-                            {h.minBinDistM <= 50 ? (
-                              <span className="px-2 py-0.5 rounded bg-primary/10 text-primary font-mono text-[10px] font-semibold">
-                                ENFORCEMENT GAP
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded bg-tertiary/15 text-tertiary font-mono text-[10px] font-semibold">
-                                INFRASTRUCTURE BIN GAP
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Anonymous Submitter Token Cohort Integrity */}
-            <div className="bg-white rounded-2xl border border-line p-5 sm:p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-bold text-ink">
-                    Submitter Cryptogram Integrity (`GS-ANON-*`)
-                  </h2>
-                  <p className="text-xs text-muted mt-0.5">
-                    Proves broad community participation without storing personal data.
-                  </p>
-                </div>
-                <span className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary font-mono text-xs font-bold">
-                  {model.validTokenPct}% Checksum Valid
-                </span>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 my-4">
-                <div className="p-3 rounded-xl bg-canvas border border-line">
-                  <span className="text-[10px] font-mono text-muted block">
-                    DISTINCT DEVICES
-                  </span>
-                  <span className="text-base font-bold font-mono text-ink">
-                    {model.submitterCohorts.length}
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-canvas border border-line">
-                  <span className="text-[10px] font-mono text-muted block">
-                    AVG PINS / DEVICE
-                  </span>
-                  <span className="text-base font-bold font-mono text-ink">
-                    {model.submitterCohorts.length > 0
-                      ? (
-                          model.totalAnalyzed / model.submitterCohorts.length
-                        ).toFixed(1)
-                      : '0'}
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-canvas border border-line">
-                  <span className="text-[10px] font-mono text-muted block">
-                    ≤2 PINS COHORT
-                  </span>
-                  <span className="text-base font-bold font-mono text-ink">
-                    {model.singleReportSubmittersPct}%
-                  </span>
-                </div>
-              </div>
-
-              <div className="max-h-72 overflow-y-auto border border-line rounded-xl">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead className="bg-canvas sticky top-0 border-b border-line text-[10px] font-mono uppercase text-muted">
-                    <tr>
-                      <th className="py-2 px-3">Submitter Token</th>
-                      <th className="py-2 px-2">Checksum</th>
-                      <th className="py-2 px-2">Reports</th>
-                      <th className="py-2 px-2">Confirmations</th>
-                      <th className="py-2 px-3">Zones</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {model.submitterCohorts.slice(0, 25).map((c) => (
-                      <tr key={c.token}>
-                        <td className="py-2 px-3 font-mono font-semibold text-ink">
+                    {model.submitterCohorts.slice(0, 20).map((c) => (
+                      <tr key={c.token} className="hover:bg-canvas/60">
+                        <td className="py-2 pr-3 font-mono font-semibold text-ink">
                           {c.token}
                         </td>
-                        <td className="py-2 px-2 font-mono text-primary">
-                          {c.isValidChecksum ? '✓ Valid' : '✗ Invalid'}
+                        <td className="py-2 pr-3">
+                          <span className="px-2 py-0.5 rounded bg-canvas border border-line text-[10px] font-semibold">
+                            {c.appStream === 'greystones_roads'
+                              ? '🕳️ Fix Roads'
+                              : '💩 Clean GS'}
+                          </span>
                         </td>
-                        <td className="py-2 px-2 font-mono font-bold">
+                        <td className="py-2 pr-3">
+                          {c.isValidChecksum ? (
+                            <span className="text-primary font-semibold">✓ Valid</span>
+                          ) : (
+                            <span className="text-error font-semibold">Invalid</span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-3 font-mono font-bold text-ink">
                           {c.reportCount}
                         </td>
-                        <td className="py-2 px-2 font-mono text-muted">
-                          +{c.confirmationsTotal}
+                        <td className="py-2 pr-3 font-mono text-ink">
+                          {c.damageEuroTotal > 0 ? `€${c.damageEuroTotal}` : '—'}
                         </td>
-                        <td className="py-2 px-3 text-muted truncate max-w-[160px]">
+                        <td className="py-2 pr-3 text-muted">
                           {c.zonesReported.join(', ')}
                         </td>
                       </tr>
@@ -946,105 +1151,128 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                   </tbody>
                 </table>
               </div>
-            </div>
+            </section>
           </div>
         )}
 
-        {/* TAB 4: RAW INCIDENT LEDGER & ADMIN DATA MANAGEMENT */}
+        {/* TAB 4: FULL INCIDENT LEDGER & SEED MANAGEMENT */}
         {activeTab === 'ledger' && (
-          <div className="bg-white rounded-2xl border border-line p-5 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <section className="bg-white rounded-2xl border border-line p-5 shadow-xs space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line">
               <div>
                 <h2 className="text-base font-bold text-ink">
-                  Complete Collected Incident Ledger ({combinedDataset.length} records)
+                  Unified Civic Incident Ledger ({combinedDataset.length} rows)
                 </h2>
                 <p className="text-xs text-muted">
-                  Inspect, search, export, or moderate individual geo-tagged reports.
+                  Showing {appFilter === 'all' ? 'both Clean Greystones & Fix Greystones Roads' : appFilter === 'greystones_roads' ? 'Fix Greystones Roads (Potholes)' : 'Clean Greystones (Dog Fouling)'} records.
                 </p>
               </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search street, token, or note…"
-                  className="px-3 py-1.5 rounded-xl border border-line bg-canvas text-xs text-ink focus:outline-none focus:ring-2 focus:ring-primary"
-                />
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={onToggleClearDemoSeed}
-                  className="px-3 py-1.5 rounded-xl border border-line bg-canvas hover:bg-line/40 text-xs font-semibold text-ink transition"
+                  className="px-3 py-1.5 rounded-lg border border-line bg-canvas hover:bg-white text-xs font-semibold text-ink transition"
                 >
                   {demoSeedCleared
-                    ? 'Restore 15 Pre-Seeded Map Pins'
-                    : 'Clear 15 Pre-Seeded Map Pins'}
+                    ? 'Restore Pre-Seeded Demo Pins'
+                    : 'Clear Demo Seeds on Public Map'}
                 </button>
               </div>
             </div>
 
-            <div className="overflow-x-auto border border-line rounded-xl max-h-[520px]">
+            <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
-                <thead className="bg-canvas sticky top-0 border-b border-line text-[10px] font-mono uppercase text-muted">
-                  <tr>
-                    <th className="py-2.5 px-3">ID</th>
-                    <th className="py-2.5 px-3">Timestamp (UTC)</th>
-                    <th className="py-2.5 px-3">Zone / Street</th>
-                    <th className="py-2.5 px-3">Impact</th>
-                    <th className="py-2.5 px-3">Bin Dist</th>
-                    <th className="py-2.5 px-3">Submitter Token</th>
-                    <th className="py-2.5 px-3">Action</th>
+                <thead>
+                  <tr className="border-b border-line text-muted font-mono uppercase text-[10px]">
+                    <th className="py-2 pr-3">ID</th>
+                    <th className="py-2 pr-3">App</th>
+                    <th className="py-2 pr-3">Timestamp (UTC)</th>
+                    <th className="py-2 pr-3">Zone / Street</th>
+                    <th className="py-2 pr-3">Impact / Severity</th>
+                    <th className="py-2 pr-3">Damage / Depth</th>
+                    <th className="py-2 pr-3">Proximity</th>
+                    <th className="py-2 pr-3">Submitter Token</th>
+                    <th className="py-2">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
-                  {combinedDataset.slice(0, 120).map((r) => {
-                    const isLiveRecord = !r.id.startsWith('hist-');
+                  {combinedDataset.slice(0, 80).map((r) => {
+                    const stream = inferReportAppStream(r);
+                    const meta = getReportSeverityDisplay(r);
+                    const validTok = isValidAnyCivicToken(r.submitterToken);
+                    const isLiveDeletable = liveReports.some((lr) => lr.id === r.id);
                     return (
-                      <tr key={r.id} className="hover:bg-canvas/50">
-                        <td className="py-2 px-3 font-mono font-semibold text-ink">
+                      <tr key={`${stream}-${r.id}`} className="hover:bg-canvas/60">
+                        <td className="py-2.5 pr-3 font-mono font-semibold text-ink">
                           {r.id}
                         </td>
-                        <td className="py-2 px-3 font-mono text-muted">
-                          {r.createdAt.replace('T', ' ').slice(0, 16)}
-                        </td>
-                        <td className="py-2 px-3">
-                          <div className="font-semibold text-ink">{r.areaName}</div>
-                          <div className="text-[11px] text-muted truncate max-w-[220px]">
-                            {r.streetName}
-                          </div>
-                        </td>
-                        <td className="py-2 px-3">
-                          <span className="font-medium text-ink">
-                            {SEVERITY_META[r.severity].shortLabel}
+                        <td className="py-2.5 pr-3 whitespace-nowrap">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                              stream === 'greystones_roads'
+                                ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                : 'bg-emerald-50 text-primary border-emerald-200'
+                            }`}
+                          >
+                            {stream === 'greystones_roads' ? '🕳️ Roads' : '💩 Fouling'}
                           </span>
                         </td>
-                        <td className="py-2 px-3 font-mono">
-                          <span
+                        <td className="py-2.5 pr-3 font-mono text-muted whitespace-nowrap">
+                          {r.createdAt.slice(0, 16).replace('T', ' ')}
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <div className="font-semibold text-ink">{r.areaName}</div>
+                          <div className="text-[11px] text-muted">{r.streetName}</div>
+                        </td>
+                        <td className="py-2.5 pr-3 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-canvas border border-line text-ink font-medium">
+                            <span>{meta.emoji}</span>
+                            <span>{meta.shortLabel}</span>
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-3 font-mono whitespace-nowrap">
+                          {r.damageEuro && r.damageEuro > 0 ? (
+                            <span className="text-error font-bold">€{r.damageEuro}</span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                          {r.depthCm ? (
+                            <span className="text-muted ml-1">({r.depthCm}cm)</span>
+                          ) : null}
+                        </td>
+                        <td className="py-2.5 pr-3 font-mono whitespace-nowrap">
+                          <strong
                             className={
-                              r.dBinAllM <= 15
-                                ? 'text-primary font-bold'
-                                : 'text-ink'
+                              r.dBinAllM <= 20 ? 'text-primary' : 'text-ink'
                             }
                           >
                             {r.dBinAllM}m
-                          </span>{' '}
+                          </strong>{' '}
                           <span className="text-muted">({r.nearestBinCode})</span>
                         </td>
-                        <td className="py-2 px-3 font-mono text-[11px] text-ink">
-                          {r.submitterToken}
+                        <td className="py-2.5 pr-3 font-mono whitespace-nowrap">
+                          <span className="text-ink">{r.submitterToken}</span>{' '}
+                          {validTok && (
+                            <span
+                              className="text-primary font-bold"
+                              title="Valid Mod-36 Checksum"
+                            >
+                              ✓
+                            </span>
+                          )}
                         </td>
-                        <td className="py-2 px-3">
-                          {isLiveRecord ? (
+                        <td className="py-2.5">
+                          {isLiveDeletable ? (
                             <button
                               type="button"
                               onClick={() => onDeleteReport(r.id)}
-                              className="text-[11px] font-semibold text-error hover:underline"
+                              className="text-xs text-error hover:underline font-semibold"
                             >
                               Delete
                             </button>
                           ) : (
                             <span className="text-[10px] font-mono text-muted">
-                              12m Cohort
+                              12M Cohort
                             </span>
                           )}
                         </td>
@@ -1054,24 +1282,9 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         )}
       </main>
-
-      <footer className="bg-white border-t border-line py-4 px-4 sm:px-6 mt-8">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-          <div>
-            <span className="font-semibold text-ink">Dedicated Firebase Hosting Site:</span>{' '}
-            <span className="font-mono text-primary">https://clean-greystones.web.app</span>{' '}
-            · <span className="font-semibold text-ink">Target Custom Domain:</span>{' '}
-            <span className="font-mono text-ink">cleangreystones.ie</span> (Admin route:{' '}
-            <span className="font-mono">cleangreystones.ie/admin</span>)
-          </div>
-          <div className="font-mono text-[11px]">
-            Zero-PII Resident Cryptograms · Organiser Key: {DEFAULT_ADMIN_PASSCODE}
-          </div>
-        </div>
-      </footer>
     </div>
   );
 };

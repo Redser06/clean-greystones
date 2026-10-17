@@ -2,19 +2,25 @@ export type SeverityType = 'just_poop' | 'stepped_in' | 'buggy_wheels' | 'wheelc
 
 export type ReportStatus = 'spotted' | 'stale' | 'pending' | 'merged';
 
+export type CivicAppStream = 'clean_greystones' | 'greystones_roads';
+
 export interface FoulingReport {
   id: string;
+  appStream?: CivicAppStream;
   createdAt: string; // ISO
   lat: number;
   lng: number;
   accuracyM: number;
   streetName: string;
   areaName: string;
+  routeCode?: string;
   h3Cell: string;
   severity: SeverityType;
   status: ReportStatus;
   confirmations: number;
   note?: string;
+  damageEuro?: number;
+  depthCm?: number;
   submitterToken: string; // Provable unique anonymous device identifier (no PII)
   nearestBinId: string;
   nearestBinCode: string;
