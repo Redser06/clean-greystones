@@ -118,7 +118,11 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
             <p className="font-semibold text-ink">Thanks, logged</p>
             <p className="text-sm text-muted">{toast.hint}</p>
           </div>
-          <button type="button" onClick={undo} className="shrink-0 text-sm font-semibold text-primary">
+          <button
+            type="button"
+            onClick={undo}
+            className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center px-2 text-sm font-semibold text-primary"
+          >
             Undo
           </button>
         </div>

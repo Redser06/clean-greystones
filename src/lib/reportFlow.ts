@@ -11,7 +11,6 @@ export function createReport(input: {
   lat: number;
   lng: number;
   impact?: Impact | null;
-  hasPhoto?: boolean;
   now?: Date;
   id?: string;
 }): Report {
@@ -25,7 +24,6 @@ export function createReport(input: {
     lat: roundCoord(input.lat),
     lng: roundCoord(input.lng),
     impact: input.impact ?? null,
-    hasPhoto: Boolean(input.hasPhoto),
   };
 }
 
@@ -38,10 +36,6 @@ export function withImpact(report: Report, impact: Impact | null): Report {
   return { ...report, impact };
 }
 
-export function withPhoto(report: Report, hasPhoto: boolean): Report {
-  return { ...report, hasPhoto };
-}
-
 export function isReport(value: unknown): value is Report {
   if (!value || typeof value !== 'object') return false;
   const report = value as Partial<Report>;
@@ -50,7 +44,6 @@ export function isReport(value: unknown): value is Report {
     typeof report.createdAt === 'string' &&
     typeof report.lat === 'number' &&
     typeof report.lng === 'number' &&
-    typeof report.hasPhoto === 'boolean' &&
     (report.impact === null ||
       report.impact === 'on_the_path' ||
       report.impact === 'stepped_in' ||

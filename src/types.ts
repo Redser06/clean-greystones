@@ -6,7 +6,6 @@ export interface Report {
   lat: number;
   lng: number;
   impact: Impact | null;
-  hasPhoto: boolean;
 }
 
 export interface LitterBin {

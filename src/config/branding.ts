@@ -1,4 +1,5 @@
-import { hexToRgbChannels, type TownConfig } from './schema';
+import type { TownConfig } from './schema';
+import { hexToRgbChannels } from './townSelect';
 
 /** Applies the town colour, name, and logo before the first React paint. */
 export function applyTownBranding(config: TownConfig, doc: Document = document): void {

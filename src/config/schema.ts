@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { pickTown } from './townSelect';
+
+export { binSourceForTown, hexToRgbChannels, townIdFromEnv } from './townSelect';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HEX_COLOUR = /^#[0-9a-fA-F]{6}$/;
@@ -158,12 +161,6 @@ function noteDuplicateIds(
   }
 }
 
-/** Blank or missing values use the bundled Greystones config. */
-export function townIdFromEnv(value: string | undefined | null): string {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : 'greystones';
-}
-
 export function validateTownConfig(value: unknown): TownConfig {
   const parsed = townConfigSchema.safeParse(value);
   if (!parsed.success) {
@@ -179,35 +176,5 @@ export function validateTownConfig(value: unknown): TownConfig {
 }
 
 export function selectTown(id: string, available: Record<string, unknown>): TownConfig {
-  const matches = Object.entries(available).filter(([path]) => path.endsWith(`/${id}.json`));
-  if (matches.length !== 1) {
-    const known = Object.keys(available)
-      .map((path) => path.split('/').pop()?.replace(/\.json$/, ''))
-      .filter((name): name is string => Boolean(name))
-      .sort()
-      .join(', ');
-    throw new Error(`Unknown town "${id}". Configured towns: ${known || 'none'}.`);
-  }
-  const config = validateTownConfig(matches[0][1]);
-  if (config.id !== id) {
-    throw new Error(`Town file ${id}.json declares id "${config.id}".`);
-  }
-  return config;
-}
-
-/** Picks the raw GeoJSON string whose file name matches the town config. */
-export function binSourceForTown(litterBinsFile: string, sources: Record<string, string>): string {
-  const fileName = litterBinsFile.split('/').pop();
-  const matches = Object.entries(sources).filter(([path]) => fileName && path.endsWith(`/${fileName}`));
-  if (matches.length !== 1) {
-    throw new Error(`Litter bin file not found: ${litterBinsFile}`);
-  }
-  return matches[0][1];
-}
-
-export function hexToRgbChannels(hex: string): string {
-  const match = /^#([0-9a-fA-F]{6})$/.exec(hex);
-  if (!match) throw new Error(`Expected a #rrggbb colour, received ${hex}`);
-  const value = Number.parseInt(match[1], 16);
-  return `${(value >> 16) & 255} ${(value >> 8) & 255} ${value & 255}`;
+  return validateTownConfig(pickTown(id, available));
 }

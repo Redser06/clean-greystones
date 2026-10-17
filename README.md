@@ -34,7 +34,7 @@ npm run dev
 
 ## Hosting
 
-Firebase Hosting for project `rapid-prototyping-4134c` serves the `dist` folder (`firebase.json`). This repository does not contain a workflow that deploys a live or preview channel. Pull requests run `.github/workflows/ci.yml` only: lint, typecheck, test and build.
+Firebase Hosting for project `rapid-prototyping-4134c` serves the `dist` folder (`firebase.json`). This repository does not contain a workflow that deploys a live or preview channel. Pull requests run `.github/workflows/ci.yml` only: lint, typecheck, test, build, and gitleaks.
 
 ## Use it for your town
 

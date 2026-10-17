@@ -42,19 +42,11 @@ export function councilReportMarkdown(
 }
 
 export function councilReportCsv(reports: Report[], bins: LitterBin[]): string {
-  const lines = ['id,created_at,latitude,longitude,impact,has_photo,nearest_litter_bin_metres'];
+  const lines = ['id,created_at,latitude,longitude,impact,nearest_litter_bin_metres'];
   for (const report of reports) {
     const metres = distanceToNearestLitterBin(report.lat, report.lng, bins);
     lines.push(
-      [
-        report.id,
-        report.createdAt,
-        report.lat,
-        report.lng,
-        report.impact ?? '',
-        report.hasPhoto ? 'yes' : 'no',
-        metres ?? '',
-      ].join(','),
+      [report.id, report.createdAt, report.lat, report.lng, report.impact ?? '', metres ?? ''].join(','),
     );
   }
   return lines.join('\n');

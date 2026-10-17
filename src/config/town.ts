@@ -1,5 +1,6 @@
 import { litterBinsFromGeoJson, type GeoJsonPointCollection } from '../lib/binDistance';
-import { binSourceForTown, selectTown, townIdFromEnv } from './schema';
+import type { TownConfig } from './schema';
+import { binSourceForTown, pickTown, townIdFromEnv } from './townSelect';
 
 const townModules = import.meta.glob('../../data/towns/*.json', {
   eager: true,
@@ -13,7 +14,7 @@ const binModules = import.meta.glob('../../data/bins/*.geojson', {
 }) as Record<string, string>;
 
 /** Town config for this build. Set VITE_TOWN to a file name in data/towns, without .json. */
-export const town = selectTown(townIdFromEnv(import.meta.env.VITE_TOWN), townModules);
+export const town = pickTown(townIdFromEnv(import.meta.env.VITE_TOWN), townModules) as TownConfig;
 
 export const LITTER_BINS = litterBinsFromGeoJson(
   JSON.parse(binSourceForTown(town.litterBinsFile, binModules)) as GeoJsonPointCollection,

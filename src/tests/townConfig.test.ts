@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -132,6 +132,25 @@ describe('town config', () => {
     assert.match(html, /Unknown town/);
     assert.match(html, /nope/);
     assert.match(html, /VITE_TOWN/);
+  });
+
+  it('keeps zod out of the browser modules', () => {
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const path = join(dir, entry);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.(tsx|ts)$/.test(entry)) files.push(path);
+      }
+    };
+    walk(join(root, 'src'));
+    for (const file of files) {
+      const testsDir = `${join('src', 'tests')}${sep}`;
+      const schemaFile = join('config', 'schema.ts');
+      if (file.includes(testsDir) || file.endsWith(schemaFile)) continue;
+      const source = readFileSync(file, 'utf8');
+      assert.equal(/from ['"]zod['"]/.test(source), false, file);
+    }
   });
 
   it('does not request web fonts or offer a photo that is not stored', () => {

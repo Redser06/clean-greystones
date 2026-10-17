@@ -10,7 +10,6 @@ import {
   moveReport,
   reportsForSession,
   withImpact,
-  withPhoto,
 } from '../lib/reportFlow';
 import { readStoredReports, writeStoredReports } from '../lib/storage';
 
@@ -25,7 +24,7 @@ function memoryStore() {
 }
 
 describe('report flow', () => {
-  it('logs a report in one step with no impact and no photo', () => {
+  it('logs a report in one step with no impact', () => {
     const now = new Date('2026-10-17T10:00:00Z');
     const report = createReport({ lat: 53.14431, lng: -6.06047, now, id: 'r-1' });
     assert.equal(report.id, 'r-1');
@@ -33,21 +32,17 @@ describe('report flow', () => {
     assert.equal(report.lat, 53.14431);
     assert.equal(report.lng, -6.06047);
     assert.equal(report.impact, null);
-    assert.equal(report.hasPhoto, false);
+    assert.equal('hasPhoto' in report, false);
     assert.equal('note' in report, false);
     assert.equal('confirmations' in report, false);
   });
 
-  it('keeps an optional impact and photo when the resident adds them', () => {
-    const report = withPhoto(
-      withImpact(
-        createReport({ lat: 53.14, lng: -6.06, id: 'r-2', now: new Date('2026-10-17T10:00:00Z') }),
-        'wheelchair',
-      ),
-      true,
+  it('keeps an optional impact when the resident adds one', () => {
+    const report = withImpact(
+      createReport({ lat: 53.14, lng: -6.06, id: 'r-2', now: new Date('2026-10-17T10:00:00Z') }),
+      'wheelchair',
     );
     assert.equal(report.impact, 'wheelchair');
-    assert.equal(report.hasPhoto, true);
   });
 
   it('moves the same report when the pin is dragged', () => {
