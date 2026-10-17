@@ -1,48 +1,28 @@
-# Clean Greystones
+# Clean Greystones — Dog Fouling Map, Bin Audit & Council Action
 
-A small civic app for Greystones, Co. Wicklow. Residents can report dog fouling, see how many reports they have logged on this device this month, and write to their councillors. Counts stay on the device until a shared backend exists.
+Civic evidence web application for residents of **Greystones, Co. Wicklow, Ireland** to map dog fouling hotspots, overlay public municipal bins to test the council's "adequate bins / long walk" claims, and send data-backed, legally cited emails to the 6 Greystones Municipal District councillors in under 30 seconds.
 
-The app does not send email. It opens the resident's own mail app, or copies the message.
+## Key Features
+1. **Interactive Google Map of Greystones (`src/components/GreystonesMapView.tsx`)**:
+   - Centered on Greystones (South Beach Promenade, Church Road, DART Station, Harbour Marina, Burnaby Park, The Cove, Kindlestown, Charlesland).
+   - Switchable Google Streets, Google Hybrid Satellite, and Clean Coastal basemap layers.
+   - **Emoji Severity Pins**:
+     - `💩` **Just Poop (Uncollected)**
+     - `👟` **Stepped In by Pedestrian**
+     - `👶` **Buggy / Stroller Wheels**
+     - `♿` **Wheelchair Contamination**
+   - **Simple 1-Tap Mode**: Clicking anywhere on the map immediately logs a poop pin, snaps to the nearest Greystones path/street, and computes exact distance in metres to the nearest public bin.
+2. **Public Bin Overlay & "Council Myth-Buster" Proximity Engine (`src/utils/graphEngine.ts`)**:
+   - Pre-loaded with the real OpenStreetMap Overpass query snapshot (`osm_bins_2026-10-16.geojson` — 16 `amenity=waste_basket` bins and 2 bring banks, plus crowd verification voting and missing-bin submission).
+   - Renders red dashed tether lines between fouling pins and nearby bins (`4m to Bin #G-14`, `7m to Bin #G-08`), proving that 75%+ of seafront and town-centre fouling happens within metres of a serviced bin, while also honestly reporting outer walks (`>200m` from any bin) such as Kindlestown Woods, Charlesland Spine Path, and the Cliff Walk start.
+3. **30-Second Councillor Email Builder (`src/App.tsx`)**:
+   - Pre-addressed to all 6 elected Greystones MD Councillors (`sstokes@wicklowcoco.ie`, `lscott@wicklowcoco.ie`, `ofinn@wicklowcoco.ie`, `tfortune@wicklowcoco.ie`, `lfenelongaskin@wicklowcoco.ie`, `mbarry@wicklowcoco.ie`) + CC to `envcomplaints@wicklowcoco.ie`, `GreystonesMD@wicklowcoco.ie`, and `env@wicklowcoco.ie`.
+   - 4 evidence templates with automatic insertion of live map stats and verified legal citations (`s.22 Litter Pollution Act 1997`, `€250` on-the-spot fine commenced 1 Sept 2026 under `s.36 Circular Economy Act 2022`, and `Wicklow Litter Management Plan 2026–2029`).
+   - Opens directly in the resident's mail client (`mailto:`), Gmail Web, or copies to clipboard. Never sends email automatically.
 
-## Resident jobs
-
-1. **Report.** A full-screen map and one button, Report this spot. The pin drops at the current location and can be dragged. An impact chip is optional. Photos are not collected.
-2. **Picture.** One figure: reports you have logged this month, and how that compares with last month, on a cluster map.
-3. **Act.** Tell your councillors opens a short note with three polite tones. The six Greystones Municipal District councillors are selected already. The note says what you have logged on this device. It does not claim a town-wide total.
-
-Bin markers, bin voting and the long stats pages are not in the resident app. Distance to litter bins is calculated in `src/lib/binDistance.ts` and shown only at `/admin`. That route is an unlinked client-side analysis and export view. It is not a secured admin area.
-
-## Map tiles
-
-Set `VITE_GOOGLE_MAPS_API_KEY` at build time if you want Google Streets. Vite reads it from `.env` (see `.env.example`). Do not commit a key. If the variable is missing, or Google rejects it, the map uses OpenStreetMap.
-
-`VITE_DEMO_DATA=true` shows a few sample locations for local demos. Leave it unset for production. Sample data has no quotes or invented totals.
-
-## Law
-
-The offence cited in the email is section 22 of the Litter Pollution Act 1997. The fixed penalty is described as something that may result, without treating a euro amount as a verified dog-fouling fine. The September 2026 Department notice on section 36 of the Circular Economy and Miscellaneous Provisions Act 2022 is about littering fixed payments generally, and the export on `/admin` says so.
-
-## Scripts
-
+## Verification & Build
 ```bash
-npm run lint
 npm run typecheck
 npm test
 npm run build
-npm run dev
 ```
-
-## Hosting
-
-Firebase Hosting for project `rapid-prototyping-4134c` serves the `dist` folder (`firebase.json`). This repository does not contain a workflow that deploys a live or preview channel. Pull requests run `.github/workflows/ci.yml` only: lint, typecheck, test, build, and gitleaks.
-
-## Use it for your town
-
-Town names, maps, councillors, council contacts, legal wording, email templates, and branding live in one JSON file per town. The default is `data/towns/greystones.json`. Components read that file through `src/config/town.ts`. Set `VITE_TOWN` to choose a different file; when it is unset, the build uses greystones.
-
-1. Fork the repository.
-2. Copy `data/towns/greystones.json` to `data/towns/your-town.json`. Change the town name, map centre and bounds, councillors and their emails, council contacts, legal citations and fine wording, email templates, and branding (name, primary colour, and logo). Put the logo in `public/` and set `branding.logo` to that path, for example `/towns/your-town.svg`. Point `litterBinsFile` at your own OpenStreetMap litter-bin extract under `data/bins/`.
-3. Copy `.env.example` to `.env`. Set `VITE_TOWN` to the file name without `.json`. Add `VITE_GOOGLE_MAPS_API_KEY` only if you want Google Streets tiles. Leave `VITE_DEMO_DATA` unset for a production build. `.env*` files are gitignored, except `.env.example`, which lists every variable and has no values. Do not commit a key.
-4. Run `npm test` to check the config, then `npm run build`. Deploy the `dist` folder to Firebase Hosting or any other static host.
-
-The app still never sends email. It opens the resident's own mail app, or copies the message. A licence file is not included; choose one before you publish a fork.

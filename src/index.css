@@ -3,59 +3,61 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
-  --color-primary: 15 23 42;
+  --bg-canvas: #f8f9ff;
+  --bg-surface: #ffffff;
+  --text-primary: #0b1c30;
+  --text-secondary: #3d4a42;
+  --accent-primary: #006948;
+  --border-default: #bccac0;
 }
 
-body {
-  margin: 0;
-  background: #f3f6f4;
-  color: #0b1c30;
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
 }
 
-:focus-visible {
-  outline: 2px solid rgb(var(--color-primary));
-  outline-offset: 2px;
+.material-symbols-outlined.fill {
+  font-variation-settings: 'FILL' 1, 'wght' 600, 'GRAD' 0, 'opsz' 24;
 }
 
-.cg-map,
-.leaflet-container {
-  height: 100%;
-  width: 100%;
-  font-family: ui-sans-serif, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  background: #e4ece7;
-}
-
-.leaflet-container img,
-.leaflet-container canvas {
-  max-width: none !important;
-  max-height: none !important;
-}
-
-.cg-marker {
+/* Remove default leaflet divIcon white box */
+.clean-gs-report-marker,
+.clean-gs-bin-marker,
+.clean-gs-draft-marker {
   background: transparent !important;
   border: none !important;
 }
 
-.cg-pin {
-  width: 22px;
-  height: 22px;
-  border: 2px solid #ffffff;
-  border-radius: 999px 999px 999px 2px;
-  background: rgb(var(--color-primary));
-  box-shadow: 0 2px 6px rgba(11, 28, 48, 0.35);
-  transform: rotate(-45deg);
-}
-
-.cg-map .leaflet-bottom.leaflet-right {
-  margin-bottom: var(--cg-inset, 8px);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
+@keyframes pulseRing {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.75;
   }
+  70% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+}
+
+.CleanGS-pulse-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  background-color: rgba(186, 26, 26, 0.45);
+  animation: pulseRing 2s infinite ease-out;
+  pointer-events: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
