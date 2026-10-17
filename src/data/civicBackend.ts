@@ -97,6 +97,7 @@ export async function submitResidentReport(
     uid: user.uid,
     count: next.count,
     windowStart: next.count === 1 ? serverTimestamp() : existing.data()?.windowStart,
+    lastReportId: reportId,
   });
   await batch.commit();
   return { ok: true, id: reportId };

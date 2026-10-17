@@ -42,7 +42,10 @@ async function createReport(
 ) {
   const batch = db.batch();
   batch.set(db.doc(`modes/${mode}/towns/${townId}/apps/${appId}/reports/${reportId}`), body);
-  batch.set(db.doc(`modes/${mode}/towns/${townId}/apps/${appId}/rateLimits/${uid}`), rate);
+  batch.set(db.doc(`modes/${mode}/towns/${townId}/apps/${appId}/rateLimits/${uid}`), {
+    ...rate,
+    lastReportId: reportId,
+  });
   await batch.commit();
 }
 
@@ -218,6 +221,7 @@ describe('firestore and storage rules', () => {
     const put = (target: firebase.storage.Reference, data: Uint8Array, metadata: firebase.storage.UploadMetadata) =>
       Promise.resolve(target.put(data, metadata));
     await assertSucceeds(put(owner.ref(path), bytes, { contentType: 'image/jpeg', customMetadata: meta }));
+    await assertFails(put(owner.ref(path), bytes, { contentType: 'image/jpeg', customMetadata: meta }));
     await assertSucceeds(owner.ref(path).getMetadata());
     await assertFails(testEnv.unauthenticatedContext().storage().ref(path).getMetadata());
     await assertFails(testEnv.authenticatedContext('other').storage().ref(path).getMetadata());
@@ -335,5 +339,113 @@ describe('firestore and storage rules', () => {
       contentType: 'image/jpeg',
       customMetadata: ownerMeta,
     }));
+    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-owned/photo'), {
+      contentType: 'image/jpeg',
+      customMetadata: ownerMeta,
+    }));
+  });
+
+  it('rejects a batch that creates more than one report on a single rate step', async () => {
+    const uid = 'resident-multi';
+    const db = testEnv.authenticatedContext(uid).firestore();
+    const opening = db.batch();
+    for (let n = 1; n <= 10; n += 1) {
+      opening.set(
+        db.doc(`modes/prod/towns/greystones/apps/litter/reports/rep-open-${n}`),
+        reportBody(uid),
+      );
+    }
+    opening.set(db.doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`), {
+      uid,
+      count: 1,
+      windowStart: stamp(),
+      lastReportId: 'rep-open-1',
+    });
+    await assertFails(opening.commit());
+
+    await assertSucceeds(createReport(
+      db,
+      uid,
+      'prod',
+      'greystones',
+      'litter',
+      'rep-first',
+      reportBody(uid),
+      { uid, count: 1, windowStart: stamp() },
+    ));
+    const windowStart = (await db.doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`).get()).data()?.windowStart;
+    const batch = db.batch();
+    for (let n = 1; n <= 10; n += 1) {
+      batch.set(
+        db.doc(`modes/prod/towns/greystones/apps/litter/reports/rep-multi-${n}`),
+        reportBody(uid),
+      );
+    }
+    batch.set(db.doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`), {
+      uid,
+      count: 2,
+      windowStart,
+      lastReportId: 'rep-multi-1',
+    });
+    await assertFails(batch.commit());
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rate = await context.firestore().doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`).get();
+      assert.equal(rate.data()?.count, 1);
+      assert.equal(rate.data()?.lastReportId, 'rep-first');
+      const saved = await context.firestore().doc('modes/prod/towns/greystones/apps/litter/reports/rep-multi-1').get();
+      assert.equal(saved.exists, false);
+    });
+  });
+
+  it('holds the hourly cap at 8 when each batch adds one report', async () => {
+    const uid = 'resident-steps';
+    const db = testEnv.authenticatedContext(uid).firestore();
+    await assertSucceeds(createReport(
+      db,
+      uid,
+      'prod',
+      'greystones',
+      'litter',
+      'rep-step-1',
+      reportBody(uid),
+      { uid, count: 1, windowStart: stamp() },
+    ));
+    const windowStart = (await db.doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`).get()).data()?.windowStart;
+    assert.ok(windowStart);
+    for (let count = 2; count <= 8; count += 1) {
+      await assertSucceeds(createReport(
+        db,
+        uid,
+        'prod',
+        'greystones',
+        'litter',
+        `rep-step-${count}`,
+        reportBody(uid),
+        { uid, count, windowStart },
+      ));
+    }
+    const ninth = db.batch();
+    ninth.set(db.doc('modes/prod/towns/greystones/apps/litter/reports/rep-step-9'), reportBody(uid));
+    ninth.set(db.doc('modes/prod/towns/greystones/apps/litter/reports/rep-step-extra'), reportBody(uid));
+    ninth.set(db.doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`), {
+      uid,
+      count: 9,
+      windowStart,
+      lastReportId: 'rep-step-9',
+    });
+    await assertFails(ninth.commit());
+    await assertFails(createReport(
+      db,
+      uid,
+      'prod',
+      'greystones',
+      'litter',
+      'rep-step-9',
+      reportBody(uid),
+      { uid, count: 9, windowStart },
+    ));
+    const rate = await db.doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`).get();
+    assert.equal(rate.data()?.count, 8);
+    assert.equal(rate.data()?.lastReportId, 'rep-step-8');
   });
 });

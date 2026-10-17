@@ -17,7 +17,7 @@ Nothing in this repository deploys those projects. The workflow only deploys hos
 4. Enable Auth providers on `greystones-civic`: Google, Apple, and Anonymous. Enable the same providers on the demo project if previews need sign-in.
 5. In GitHub, create an Environment named `prod`. Limit deployment branches to `main`. Add a required reviewer. Store the `greystones-civic` service account as the environment secret `FIREBASE_SERVICE_ACCOUNT`. Do not also create a repository secret with that name. Environment secrets are not available to pull-request jobs, and the pull-request job does not reference that secret.
 6. Store a separate `greystones-civic-demo` service account as the repository secret `FIREBASE_DEMO_SERVICE_ACCOUNT`. That account must not be able to deploy production or replace rules.
-7. Optional: set repository or `prod` environment secrets `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, and `VITE_FIREBASE_APP_ID` from the `greystones-civic` web app config. The prod build reads them. Empty values are fine; the client no-ops. Do not print them.
+7. Optional: set repository variables (Settings → Secrets and variables → Actions → Variables) `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, and `VITE_FIREBASE_APP_ID` from the `greystones-civic` web app config. The prod build reads `vars.*`. Empty values are fine; the client no-ops. These are not secrets.
 8. Turn on branch protection for `main`. Agents open pull requests. Conor approves and merges.
 
 Production hosting deploys from `main` only after CI is green on that commit, with `VITE_DEMO` unset, to `hosting:clean-prod` on `greystones-civic`. Pull-request previews deploy only to `clean-demo` on `greystones-civic-demo`, and they skip with a log line when the demo secret is absent.
@@ -58,15 +58,16 @@ Replace the example addresses with the real organiser addresses in the shell. Th
 
 Creates are limited to 8 reports per user per app per hour. The limit is in Firestore rules, in the same batch as the report.
 
-- A new `rateLimits/{uid}` document is allowed only with `count == 1` and `windowStart == request.time`.
-- An update may only add 1 to `count` while keeping the same `windowStart`, and `count` cannot pass 8.
+- A new `rateLimits/{uid}` document is allowed only with `count == 1`, `windowStart == request.time`, and `lastReportId` set to the report created in that same batch.
+- An update may only add 1 to `count` while keeping the same `windowStart`, and `count` cannot pass 8. `lastReportId` must be the one report in the batch. `existsAfter` requires that report.
+- A report create is allowed only when `getAfter` on the rate doc has `lastReportId` equal to that report. One step cannot carry a second report.
 - A reset (`count == 1` and a new `windowStart == request.time`) is allowed only once `request.time` is at least one hour past the stored `windowStart`.
 
 A client cannot clear the window by writing a fresh timestamp. A client-side counter is optional. A Cloud Function that runs after the write would be too late to refuse it. The rules check runs in the emulator with no credentials.
 
 ## Client
 
-`src/data/civicBackend.ts` is the typed client the resident data layer calls when demo mode is off. The Firebase SDK is loaded with dynamic `import()` so it is not part of the main App chunk. Demo builds keep the synthetic seeds in `src/data/demoSeeds.ts` and `src/utils/demoCohorts.ts` and do not write them to Firestore. Seeded rows carry `is_seeded_demo: true`. `countForEvidence()` counts only real reports from the current device and throws in demo mode. `deliverCouncillorEmail()` refuses a sendable councillor email in demo: it returns a placeholder recipient and stamps `SAMPLE`. The on-screen subject and body stay as they are.
+`src/data/civicBackend.ts` is the typed client the resident data layer calls when demo mode is off. The Firebase SDK is loaded with dynamic `import()` so it is not part of the main App chunk. Demo builds keep the synthetic seeds in `src/data/demoSeeds.ts` and `src/utils/demoCohorts.ts` and do not write them to Firestore. Seeded rows carry `is_seeded_demo: true`. `countForEvidence()` counts only real reports from the current device and throws in demo mode. `deliverCouncillorEmail()` refuses a sendable councillor email in demo: it returns a placeholder recipient. `mailtoSample()` puts `SAMPLE` on the mailto and Gmail subject and body only. The on-screen preview still renders the unstamped subject and body.
 
 ## Add a town
 

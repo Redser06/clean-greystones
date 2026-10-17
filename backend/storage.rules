@@ -27,7 +27,8 @@ service firebase.storage {
         resource.metadata.ownerUid == request.auth.uid
         || isTownAdmin(townId)
       );
-      allow create: if signedIn()
+      allow create: if resource == null
+        && signedIn()
         && mode == 'prod'
         && isKnownTown(townId)
         && (appId == 'litter' || appId == 'roads')

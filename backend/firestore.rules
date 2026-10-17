@@ -64,10 +64,18 @@ service cloud.firestore {
       return data.uid == uid
         && data.count is int
         && data.windowStart is timestamp
-        && data.keys().hasOnly(['uid', 'count', 'windowStart']);
+        && data.lastReportId is string
+        && data.lastReportId.size() > 0
+        && data.lastReportId.size() <= 128
+        && data.keys().hasOnly(['uid', 'count', 'windowStart', 'lastReportId']);
     }
 
-    function rateAllows(mode, townId, appId) {
+    function ratedReport(mode, townId, appId) {
+      return /databases/$(database)/documents/modes/$(mode)/towns/$(townId)/apps/$(appId)/reports/$(request.resource.data.lastReportId);
+    }
+
+    // One rate-doc step names exactly one report. A batch cannot share that step.
+    function rateAllows(mode, townId, appId, reportId) {
       let path = ratePath(mode, townId, appId);
       let after = getAfter(path);
       let existed = exists(path);
@@ -76,6 +84,7 @@ service cloud.firestore {
         && isKnownTown(townId)
         && isApp(appId)
         && rateShape(after.data, request.auth.uid)
+        && after.data.lastReportId == reportId
         && (
           (fresh && after.data.count == 1 && after.data.windowStart == request.time)
           || (!fresh
@@ -93,7 +102,7 @@ service cloud.firestore {
       allow create: if signedIn()
         && mode == 'prod'
         && validReport(request.resource.data, mode, townId, appId)
-        && rateAllows(mode, townId, appId);
+        && rateAllows(mode, townId, appId, reportId);
       allow update, delete: if false;
     }
 
@@ -111,7 +120,8 @@ service cloud.firestore {
         && request.auth.uid == uid
         && rateShape(request.resource.data, uid)
         && request.resource.data.count == 1
-        && request.resource.data.windowStart == request.time;
+        && request.resource.data.windowStart == request.time
+        && existsAfter(ratedReport(mode, townId, appId));
       allow update: if signedIn()
         && mode == 'prod'
         && isKnownTown(townId)
@@ -119,6 +129,7 @@ service cloud.firestore {
         && request.auth.uid == uid
         && rateShape(request.resource.data, uid)
         && rateShape(resource.data, uid)
+        && existsAfter(ratedReport(mode, townId, appId))
         && (
           (
             request.resource.data.count == resource.data.count + 1

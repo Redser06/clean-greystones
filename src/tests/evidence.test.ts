@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { countForEvidence, deliverCouncillorEmail, SAMPLE_EMAIL_RECIPIENT } from '../data/evidence';
+import { countForEvidence, deliverCouncillorEmail, mailtoSample, SAMPLE_EMAIL_RECIPIENT } from '../data/evidence';
 import { isDemo } from '../config/mode';
 import { nextRateWindow } from '../data/firestorePaths';
 import { exportReportsToCsv, withSampleMarker } from '../utils/adminAnalytics';
@@ -46,9 +46,21 @@ describe('demo gate', () => {
     assert.equal(live.sample, undefined);
     assert.deepEqual(live.toEmails, to);
     assert.deepEqual(live.ccEmails, cc);
+    const stamped = mailtoSample('Dog fouling', 'Dear Councillors,', true);
+    assert.equal(stamped.subject, 'SAMPLE Dog fouling');
+    assert.equal(stamped.body.startsWith('SAMPLE\n\nDear Councillors,'), true);
+    assert.deepEqual(mailtoSample('Dog fouling', 'Dear Councillors,', false), {
+      subject: 'Dog fouling',
+      body: 'Dear Councillors,',
+    });
     const app = readFileSync(join(fileURLToPath(new URL('..', import.meta.url)), 'App.tsx'), 'utf8');
     assert.equal(/catch\s*\{[^}]*totalActiveReports/.test(app), false);
     assert.equal(app.includes('deliverCouncillorEmail'), true);
+    assert.equal(app.includes('mailtoSample(subject, body)'), true);
+    assert.equal(app.includes('{generatedEmail.subject}'), true);
+    assert.equal(app.includes('{generatedEmail.body}'), true);
+    assert.equal(app.includes('encodeURIComponent(mailed.subject)'), true);
+    assert.equal(app.includes('encodeURIComponent(mailed.body)'), true);
   });
 
   it('stamps SAMPLE on demo exports and marks every seed is_seeded_demo', () => {

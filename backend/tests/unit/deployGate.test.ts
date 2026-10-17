@@ -30,7 +30,10 @@ describe('deploy gate', () => {
     assert.equal(read('data/towns/greystones.json').includes('"firebaseProject": "greystones-civic"'), true);
 
     const ci = read('.github/workflows/ci.yml');
-    assert.equal(ci.includes('VITE_FIREBASE_API_KEY'), true);
+    assert.equal(ci.includes('vars.VITE_FIREBASE_API_KEY'), true);
+    assert.equal(ci.includes('secrets.VITE_FIREBASE_API_KEY'), false);
+    assert.equal(workflow.includes('vars.VITE_FIREBASE_API_KEY'), true);
+    assert.equal(workflow.includes('secrets.VITE_FIREBASE_API_KEY'), false);
     assert.equal(ci.includes('FIREBASE_SERVICE_ACCOUNT'), false);
   });
 });

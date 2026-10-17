@@ -29,7 +29,7 @@ export interface CouncillorDelivery {
 
 /**
  * Demo mode does not build a sendable email to councillors.
- * The placeholder recipient and SAMPLE stamp are not shown in the preview.
+ * The placeholder recipient is not shown in the preview.
  */
 export function deliverCouncillorEmail(
   toEmails: readonly string[],
@@ -44,5 +44,14 @@ export function deliverCouncillorEmail(
     ccEmails: [],
     sample: 'SAMPLE',
     sendable: false,
+  };
+}
+
+/** SAMPLE goes on the mailto/gmail subject and body only. The in-app preview strings stay as they are. */
+export function mailtoSample(subject: string, body: string, demo: boolean = isDemo): { subject: string; body: string } {
+  if (!demo) return { subject, body };
+  return {
+    subject: `SAMPLE ${subject}`,
+    body: `SAMPLE\n\n${body}`,
   };
 }

@@ -7,7 +7,7 @@ import {
   INITIAL_PUBLIC_BINS,
   VERIFIED_CITATIONS,
 } from './data/greystonesData';
-import { countForEvidence, deliverCouncillorEmail } from './data/evidence';
+import { countForEvidence, deliverCouncillorEmail, mailtoSample } from './data/evidence';
 import { isDemo } from './config/mode';
 import {
   EmailTemplateId,
@@ -375,15 +375,16 @@ Kind regards,
 ${residentSignOff}
 (Anonymous Verification ID: ${submitterToken})`;
 
+    const mailed = mailtoSample(subject, body);
     const mailtoHref = `mailto:${delivery.toEmails.join(',')}?cc=${encodeURIComponent(
       delivery.ccEmails.join(',')
-    )}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    )}&subject=${encodeURIComponent(mailed.subject)}&body=${encodeURIComponent(mailed.body)}`;
 
     const gmailHref = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
       delivery.toEmails.join(',')
     )}&cc=${encodeURIComponent(delivery.ccEmails.join(','))}&su=${encodeURIComponent(
-      subject
-    )}&body=${encodeURIComponent(body)}`;
+      mailed.subject
+    )}&body=${encodeURIComponent(mailed.body)}`;
 
     return {
       toEmails: delivery.toEmails,
