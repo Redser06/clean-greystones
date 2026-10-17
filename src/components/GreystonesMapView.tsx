@@ -1,21 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { FoulingReport, PublicBin, SeverityType } from '../types';
-import { SEVERITY_META, haversineDistanceMeters } from '../utils/graphEngine';
+import { SEVERITY_META } from '../utils/graphEngine';
 
 interface GreystonesMapViewProps {
   reports: FoulingReport[];
   bins: PublicBin[];
   activeFilter: 'all' | 'near_bins' | 'wheels' | 'stepped_in';
   showBinOverlay: boolean;
-  showProximityLines: boolean;
   selectedReport: FoulingReport | null;
   onSelectReport: (report: FoulingReport | null) => void;
-  selectedBin: PublicBin | null;
-  onSelectBin: (bin: PublicBin | null) => void;
   draftCoords: { lat: number; lng: number };
   onMapClickDropPin: (lat: number, lng: number) => void;
-  quickOneTapMode: boolean;
   quickSeverity: SeverityType;
 }
 
@@ -24,13 +20,10 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
   bins,
   activeFilter,
   showBinOverlay,
-  showProximityLines,
   selectedReport,
   onSelectReport,
-  onSelectBin,
   draftCoords,
   onMapClickDropPin,
-  quickOneTapMode,
   quickSeverity,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -40,7 +33,6 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
 
   const [basemapStyle, setBasemapStyle] = useState<'google_streets' | 'google_hybrid' | 'clean_coastal'>('google_streets');
 
-  // Filter reports
   const filteredReports = reports.filter((r) => {
     if (r.status === 'merged') return false;
     if (activeFilter === 'near_bins') return r.dBinAllM <= 25;
@@ -51,22 +43,19 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
     return true;
   });
 
-  // Initialize Map once
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
     const map = L.map(mapContainerRef.current, {
-      center: [53.1445, -6.0615], // Greystones South Beach Prom & Church Road
+      center: [53.1445, -6.0615],
       zoom: 16,
       zoomControl: false,
       attributionControl: true,
     });
 
-    const tileUrl =
-      'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}';
-    const tileLayer = L.tileLayer(tileUrl, {
+    const tileLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
       maxZoom: 20,
-      attribution: 'Map data &copy; Google & OpenStreetMap contributors · Greystones MD',
+      attribution: 'Map data &copy; Google & OpenStreetMap · Greystones',
     }).addTo(map);
 
     const layerGroup = L.layerGroup().addTo(map);
@@ -88,7 +77,6 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
     };
   }, []);
 
-  // Switch basemap tile URL when basemapStyle changes
   useEffect(() => {
     if (!tileLayerRef.current) return;
     if (basemapStyle === 'google_streets') {
@@ -102,173 +90,110 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
     }
   }, [basemapStyle]);
 
-  // Render Bins, Proximity Lines, Incident Emoji Pins, and Active Drop Target
   useEffect(() => {
     const layerGroup = layerGroupRef.current;
     if (!layerGroup) return;
     layerGroup.clearLayers();
 
-    // 1. Render Public Bins Overlay
+    // 1. Optional Background Bin Layer (hidden by default so map stays uncluttered, toggleable via drawer)
     if (showBinOverlay) {
       for (const bin of bins) {
-        if (bin.status === 'removed') continue;
-        const isVerified = bin.status === 'verified';
-        const isRecycling = bin.kind === 'recycling';
-
+        if (bin.status === 'removed' || bin.kind === 'recycling') continue;
         const binHtml = `
-          <div class="relative flex flex-col items-center group cursor-pointer select-none">
-            <div class="${
-              isRecycling
-                ? 'bg-slate-600 text-white border-white'
-                : isVerified
-                ? 'bg-[#006948] text-white border-white ring-2 ring-[#006948]/40'
-                : 'bg-white text-[#006948] border-2 border-dashed border-[#006948]'
-            } w-8 h-8 rounded-full border-2 shadow-md flex items-center justify-center text-sm transition-transform hover:scale-110">
-              ${isRecycling ? '♻️' : '🗑️'}
-            </div>
-            <div class="mt-0.5 bg-[#0b1c30]/90 text-[#f8f9ff] font-display text-[9px] font-bold px-1.5 py-0.2 rounded whitespace-nowrap shadow">
-              ${bin.code}${!isVerified ? ' (?)' : ''}
+          <div class="flex flex-col items-center select-none opacity-85">
+            <div class="bg-[#006948] text-white border border-white w-6 h-6 rounded-full shadow-sm flex items-center justify-center text-xs">
+              🗑️
             </div>
           </div>
         `;
-
         const icon = L.divIcon({
           html: binHtml,
           className: 'clean-gs-bin-marker',
-          iconSize: [44, 44],
-          iconAnchor: [22, 20],
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
         });
-
-        const marker = L.marker([bin.lat, bin.lng], { icon, zIndexOffset: 100 });
-        marker.on('click', (e) => {
-          L.DomEvent.stopPropagation(e);
-          onSelectReport(null);
-          onSelectBin(bin);
-        });
-        marker.addTo(layerGroup);
+        L.marker([bin.lat, bin.lng], { icon, zIndexOffset: 50 }).addTo(layerGroup);
       }
     }
 
-    // 2. Render Dashed Red Proximity Lines & Report Emoji Pins
+    // 2. Render Fouling Emoji Pins (Clean & Uncluttered)
     for (const report of filteredReports) {
-      const nearestBin = bins.find((b) => b.id === report.nearestBinId);
-      const isNearBin = report.dBinAllM <= 35;
-
-      if (showProximityLines && showBinOverlay && nearestBin && isNearBin) {
-        const polyline = L.polyline(
-          [
-            [report.lat, report.lng],
-            [nearestBin.lat, nearestBin.lng],
-          ],
-          {
-            color: '#ba1a1a',
-            weight: 2.5,
-            dashArray: '4, 5',
-            opacity: 0.85,
-          }
-        );
-        polyline.addTo(layerGroup);
-      }
-
       const meta = SEVERITY_META[report.severity];
       const isSelected = selectedReport?.id === report.id;
-      const isCleared = report.status === 'cleared';
-      const isHighImpact = meta.isHighImpact && !isCleared;
+      const isHighImpact = meta.isHighImpact;
 
-      const badgeLabel = isCleared
-        ? '✅ Cleared'
-        : report.dBinAllM <= 25
-        ? `📏 ${report.dBinAllM}m to bin`
-        : `${report.dBinAllM}m`;
+      // Subtle dashed tether to nearest bin ONLY for the actively tapped pin if bins are shown
+      if (isSelected && showBinOverlay) {
+        const nearestBin = bins.find((b) => b.id === report.nearestBinId);
+        if (nearestBin && report.dBinAllM <= 50) {
+          L.polyline(
+            [
+              [report.lat, report.lng],
+              [nearestBin.lat, nearestBin.lng],
+            ],
+            {
+              color: '#ba1a1a',
+              weight: 2,
+              dashArray: '4, 4',
+              opacity: 0.75,
+            }
+          ).addTo(layerGroup);
+        }
+      }
 
       const pinHtml = `
         <div class="relative flex flex-col items-center select-none group">
           <div class="relative">
-            ${
-              isSelected || report.severity === 'wheelchair_wheels'
-                ? '<span class="CleanGS-pulse-ring"></span>'
-                : ''
-            }
+            ${isSelected ? '<span class="CleanGS-pulse-ring"></span>' : ''}
             <div class="relative ${
-              isCleared
-                ? 'bg-emerald-100 border-emerald-600 opacity-85'
-                : isSelected
-                ? 'bg-white border-[#ba1a1a] scale-110 ring-4 ring-[#ba1a1a]/30'
+              isSelected
+                ? 'bg-white border-[#006948] scale-110 ring-4 ring-[#006948]/25'
                 : isHighImpact
                 ? 'bg-white border-[#ba1a1a]'
-                : 'bg-white border-amber-800'
-            } w-9 h-9 rounded-full border-2 shadow-lg flex items-center justify-center text-lg transition-transform hover:scale-110">
-              <span>${isCleared ? '✅' : meta.emoji}</span>
+                : 'bg-white border-[#0b1c30]/30'
+            } w-9 h-9 rounded-full border-2 shadow-md flex items-center justify-center text-lg transition-transform hover:scale-110">
+              <span>${meta.emoji}</span>
             </div>
-            ${
-              isHighImpact
-                ? `<div class="absolute -top-1 -right-1 bg-[#ba1a1a] text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center font-extrabold shadow">!</div>`
-                : ''
-            }
           </div>
-          <span class="mt-0.5 ${
-            isCleared
-              ? 'bg-emerald-700 text-white'
-              : report.dBinAllM <= 25
-              ? 'bg-[#ba1a1a] text-white'
-              : 'bg-slate-800 text-white'
-          } text-[9px] font-bold px-1.5 py-0.2 rounded whitespace-nowrap shadow">
-            ${badgeLabel}
-          </span>
         </div>
       `;
 
       const icon = L.divIcon({
         html: pinHtml,
         className: 'clean-gs-report-marker',
-        iconSize: [56, 52],
-        iconAnchor: [28, 22],
+        iconSize: [38, 38],
+        iconAnchor: [19, 19],
       });
 
       const marker = L.marker([report.lat, report.lng], {
         icon,
-        zIndexOffset: isSelected ? 900 : isHighImpact ? 500 : 300,
+        zIndexOffset: isSelected ? 900 : isHighImpact ? 400 : 200,
       });
 
       marker.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
-        onSelectBin(null);
         onSelectReport(report);
       });
 
       marker.addTo(layerGroup);
     }
 
-    // 3. Render Draft / Target Crosshair Pin for User's Next Drop
-    let nearestDraftBinDist = 999;
-    let nearestDraftBinCode = 'Bin';
-    for (const b of bins) {
-      const d = haversineDistanceMeters(draftCoords.lat, draftCoords.lng, b.lat, b.lng);
-      if (d < nearestDraftBinDist) {
-        nearestDraftBinDist = d;
-        nearestDraftBinCode = b.code;
-      }
-    }
-
+    // 3. Subtle draggable crosshair pin for current drop position
     const activeEmoji = SEVERITY_META[quickSeverity].emoji;
     const draftHtml = `
       <div class="relative flex flex-col items-center pointer-events-none select-none">
-        <div class="bg-[#213145] text-[#eaf1ff] px-2.5 py-0.5 rounded-full shadow-lg text-[10px] font-bold flex items-center gap-1 mb-1 whitespace-nowrap border border-emerald-400/50">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-          <span>Target Pin (${nearestDraftBinDist}m to ${nearestDraftBinCode})</span>
-        </div>
-        <div class="w-11 h-11 rounded-2xl bg-amber-900 border-2 border-white shadow-xl flex items-center justify-center text-2xl">
+        <div class="w-10 h-10 rounded-2xl bg-[#006948] border-2 border-white shadow-lg flex items-center justify-center text-xl">
           ${activeEmoji}
         </div>
-        <div class="w-2.5 h-2.5 bg-amber-900 rotate-45 -mt-1.5"></div>
+        <div class="w-2.5 h-2.5 bg-[#006948] rotate-45 -mt-1.5"></div>
       </div>
     `;
 
     const draftIcon = L.divIcon({
       html: draftHtml,
       className: 'clean-gs-draft-marker',
-      iconSize: [140, 74],
-      iconAnchor: [70, 66],
+      iconSize: [44, 48],
+      iconAnchor: [22, 44],
     });
 
     const draftMarker = L.marker([draftCoords.lat, draftCoords.lng], {
@@ -287,67 +212,71 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
     filteredReports,
     bins,
     showBinOverlay,
-    showProximityLines,
     selectedReport,
     draftCoords,
-    quickOneTapMode,
     quickSeverity,
   ]);
 
   const handleRecenterGreystones = () => {
     if (!mapInstanceRef.current) return;
-    mapInstanceRef.current.flyTo([53.1443, -6.0606], 16, { duration: 0.7 });
+    mapInstanceRef.current.flyTo([53.1443, -6.0606], 16, { duration: 0.65 });
   };
 
   const handleFlyToHotspot = (lat: number, lng: number, zoom = 17) => {
     if (!mapInstanceRef.current) return;
-    mapInstanceRef.current.flyTo([lat, lng], zoom, { duration: 0.7 });
+    mapInstanceRef.current.flyTo([lat, lng], zoom, { duration: 0.65 });
   };
 
   return (
-    <div className="relative w-full h-full flex-1 overflow-hidden bg-[#eef4fb]">
-      {/* Real Interactive Map Container */}
+    <div className="relative w-full h-full flex-1 overflow-hidden bg-[#e4ece7]">
       <div ref={mapContainerRef} className="w-full h-full z-0" />
 
-      {/* Top Left Quick Jump Pills for Greystones Zones */}
-      <div className="absolute top-3 left-3 z-20 flex flex-wrap gap-1.5 max-w-[75%] pointer-events-auto">
+      {/* Pre-Configured Zoomed-In Greystones Zones (Compact horizontal strip at top) */}
+      <div className="absolute top-2.5 left-2.5 right-14 z-20 flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 pointer-events-auto">
         <button
           type="button"
           onClick={() => handleFlyToHotspot(53.1442, -6.0604, 17)}
-          className="bg-surface-container-lowest/95 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-md text-[11px] font-display font-bold text-on-surface hover:bg-primary hover:text-white transition-colors flex items-center gap-1"
+          className="bg-white/95 backdrop-blur-sm px-2.5 py-1.5 rounded-full border border-line shadow-sm text-xs font-semibold text-ink hover:border-primary hover:text-primary transition-colors flex items-center gap-1 shrink-0"
         >
           <span>🏖️</span> South Beach Prom
         </button>
         <button
           type="button"
           onClick={() => handleFlyToHotspot(53.1451, -6.0635, 17)}
-          className="bg-surface-container-lowest/95 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-md text-[11px] font-display font-bold text-on-surface hover:bg-primary hover:text-white transition-colors flex items-center gap-1"
+          className="bg-white/95 backdrop-blur-sm px-2.5 py-1.5 rounded-full border border-line shadow-sm text-xs font-semibold text-ink hover:border-primary hover:text-primary transition-colors flex items-center gap-1 shrink-0"
         >
           <span>🚆</span> Church Rd & DART
         </button>
         <button
           type="button"
           onClick={() => handleFlyToHotspot(53.1492, -6.063, 16)}
-          className="bg-surface-container-lowest/95 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-md text-[11px] font-display font-bold text-on-surface hover:bg-primary hover:text-white transition-colors flex items-center gap-1"
+          className="bg-white/95 backdrop-blur-sm px-2.5 py-1.5 rounded-full border border-line shadow-sm text-xs font-semibold text-ink hover:border-primary hover:text-primary transition-colors flex items-center gap-1 shrink-0"
         >
           <span>⚓</span> Harbour Marina
         </button>
         <button
           type="button"
-          onClick={() => handleFlyToHotspot(53.1465, -6.0762, 16)}
-          className="bg-surface-container-lowest/95 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-md text-[11px] font-display font-bold text-on-surface hover:bg-primary hover:text-white transition-colors flex items-center gap-1"
+          onClick={() => handleFlyToHotspot(53.1448, -6.0658, 17)}
+          className="bg-white/95 backdrop-blur-sm px-2.5 py-1.5 rounded-full border border-line shadow-sm text-xs font-semibold text-ink hover:border-primary hover:text-primary transition-colors flex items-center gap-1 shrink-0"
         >
-          <span>🌲</span> Kindlestown (No Bins)
+          <span>🌳</span> Burnaby Park
+        </button>
+        <button
+          type="button"
+          onClick={() => handleFlyToHotspot(53.1465, -6.0762, 16)}
+          className="bg-white/95 backdrop-blur-sm px-2.5 py-1.5 rounded-full border border-line shadow-sm text-xs font-semibold text-ink hover:border-primary hover:text-primary transition-colors flex items-center gap-1 shrink-0"
+        >
+          <span>🌲</span> Kindlestown
         </button>
       </div>
 
       {/* Floating Right Map Controls */}
-      <div className="absolute right-3 top-3 flex flex-col gap-2 z-20 pointer-events-auto">
+      <div className="absolute right-2.5 top-2.5 flex flex-col gap-2 z-20 pointer-events-auto">
         <button
           type="button"
           onClick={handleRecenterGreystones}
-          className="w-10 h-10 bg-surface-container-lowest text-on-surface rounded-xl shadow-md border border-slate-200 flex items-center justify-center hover:bg-surface-container active:scale-95 transition-transform"
-          title="Recenter on Greystones South Beach & Town"
+          className="w-10 h-10 bg-white/95 text-ink rounded-xl shadow-sm border border-line flex items-center justify-center hover:bg-canvas active:scale-95 transition-transform"
+          title="Recenter on Greystones"
         >
           <span className="material-symbols-outlined text-[20px] text-primary">my_location</span>
         </button>
@@ -362,23 +291,11 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
                 : 'google_streets'
             )
           }
-          className="w-10 h-10 bg-surface-container-lowest text-on-surface rounded-xl shadow-md border border-slate-200 flex items-center justify-center hover:bg-surface-container active:scale-95 transition-transform"
-          title="Switch Map Layer (Google Streets / Satellite / Clean Coastal)"
+          className="w-10 h-10 bg-white/95 text-ink rounded-xl shadow-sm border border-line flex items-center justify-center hover:bg-canvas active:scale-95 transition-transform"
+          title="Switch Map Layer (Streets / Satellite / Clean)"
         >
-          <span className="material-symbols-outlined text-[20px] text-secondary">layers</span>
+          <span className="material-symbols-outlined text-[20px] text-muted">layers</span>
         </button>
-      </div>
-
-      {/* Tap anywhere instruction pill */}
-      <div className="absolute top-14 left-3 z-20 pointer-events-none hidden sm:block">
-        <div className="bg-surface-container-lowest/90 backdrop-blur-sm px-3 py-1 rounded-full border border-slate-200 shadow-sm text-[11px] font-medium text-on-surface-variant flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-[14px] text-primary">touch_app</span>
-          <span>
-            {quickOneTapMode
-              ? 'Simple 1-Tap Mode Active: Click anywhere on the map to immediately log poop + calculate bin distance'
-              : 'Click anywhere on the map to position your pin, or tap an existing 💩 / ♿ / 🗑️ marker'}
-          </span>
-        </div>
       </div>
     </div>
   );

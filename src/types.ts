@@ -1,6 +1,6 @@
 export type SeverityType = 'just_poop' | 'stepped_in' | 'buggy_wheels' | 'wheelchair_wheels';
 
-export type ReportStatus = 'spotted' | 'cleared' | 'stale' | 'pending' | 'merged';
+export type ReportStatus = 'spotted' | 'stale' | 'pending' | 'merged';
 
 export interface FoulingReport {
   id: string;
@@ -15,14 +15,15 @@ export interface FoulingReport {
   status: ReportStatus;
   confirmations: number;
   note?: string;
-  reporterInitials: string;
+  submitterToken: string; // Provable unique anonymous device identifier (no PII)
   nearestBinId: string;
   nearestBinCode: string;
   dBinAllM: number;
   dBinVerifiedM: number;
   hasPhoto?: boolean;
+  photoDataUrl?: string;
   photoCaption?: string;
-  clearedAt?: string;
+  isSeededDemo?: boolean;
 }
 
 export type BinKind = 'general' | 'dog_waste' | 'bag_dispenser' | 'recycling';
@@ -90,8 +91,7 @@ export type EmailTemplateId =
   | 'hotspot_evidence'
   | 'bin_mythbuster'
   | 'wheel_contamination'
-  | 'request_bin'
-  | 'follow_up_accountability';
+  | 'request_bin';
 
 export interface EmailTemplateOption {
   id: EmailTemplateId;
@@ -103,10 +103,16 @@ export interface EmailTemplateOption {
 export interface GraphRunSummary {
   runId: string;
   reportId: string;
+  submitterToken: string;
   timestamp: string;
   n1Validate: { ok: boolean; reason: string };
   n4Dedupe: { action: 'new' | 'confirm' | 'merge'; targetId?: string; distanceM?: number };
   n5Snap: { snapped: boolean; street: string };
-  n6BinDist: { nearestBinCode: string; distanceM: number; isNearBinMythbuster: boolean; promptType: 'confirm_bin' | 'survey_cell' | 'none' };
+  n6BinDist: {
+    nearestBinCode: string;
+    distanceM: number;
+    isNearBinMythbuster: boolean;
+    promptType: 'confirm_bin' | 'survey_cell' | 'none';
+  };
   n7Commit: { status: ReportStatus };
 }

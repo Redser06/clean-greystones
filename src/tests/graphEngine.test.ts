@@ -4,7 +4,9 @@ import {
   checkPiiAndGuardrails,
   computeBinsVsFoulingAnalysis,
   findNearestBins,
+  generateAnonymousSubmitterToken,
   haversineDistanceMeters,
+  isValidSubmitterToken,
   selectVerifiedCitations,
 } from '../utils/graphEngine';
 import {
@@ -27,12 +29,33 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.ok(res.dBinAllM <= 10);
   });
 
-  it('computes Bins vs Fouling analysis (Node N10) with both near-bin myth-buster and far-from-bin (>200m) lists', () => {
+  it('computes Bins vs Fouling analysis (Node N10) with both near-bin myth-buster, far-from-bin (>200m) lists, and distinct submitter count', () => {
     const analysis = computeBinsVsFoulingAnalysis(INITIAL_REPORTS);
     assert.equal(analysis.totalActiveReports, INITIAL_REPORTS.length);
+    assert.ok(analysis.distinctSubmitters >= 8, 'Expected multiple distinct anonymous submitters in seeded data');
     assert.ok(analysis.nearBin15mPct >= 60, 'Expected majority of coastal reports within 15m of a bin');
     assert.ok(analysis.nearBinHotspots.length > 0, 'Expected near-bin hotspots list to be populated');
     assert.ok(analysis.farFromBinHotspots.length > 0, 'Expected far-from-bin (>200m) hotspots list to be populated');
+  });
+
+  it('handles production clean-slate (0 reports) cleanly without division by zero', () => {
+    const emptyAnalysis = computeBinsVsFoulingAnalysis([]);
+    assert.equal(emptyAnalysis.totalActiveReports, 0);
+    assert.equal(emptyAnalysis.distinctSubmitters, 0);
+    assert.equal(emptyAnalysis.nearBin15mPct, 0);
+    assert.equal(emptyAnalysis.verdict, 'inconclusive');
+  });
+
+  it('generates and validates provable anonymous submitter tokens (GS-ANON-XXXX-XXXX) with deterministic checksum', () => {
+    const token = generateAnonymousSubmitterToken();
+    assert.match(token, /^GS-ANON-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    assert.equal(isValidSubmitterToken(token), true);
+    assert.equal(isValidSubmitterToken('GS-ANON-0000-ZZZZ'), false);
+    assert.equal(
+      INITIAL_REPORTS.every((r) => r.isSeededDemo === true && isValidSubmitterToken(r.submitterToken)),
+      true,
+      'Every pre-seeded demo report must carry a valid GS-ANON token and isSeededDemo flag'
+    );
   });
 
   it('enforces Node N9 guardrail: never returns unverified citations (withholds L10 Beach Bye-Laws unverified clause)', () => {

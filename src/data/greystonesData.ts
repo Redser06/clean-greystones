@@ -6,9 +6,10 @@ import {
   LegalCitation,
   PublicBin,
 } from '../types';
+import { generateAnonymousSubmitterToken } from '../utils/graphEngine';
 
 /**
- * Real 21 OpenStreetMap waste_basket (16) and recycling (5) nodes imported from
+ * Real OpenStreetMap waste_basket (16) and recycling (2) nodes imported from
  * osm_bins_2026-10-16.geojson (Overpass query 2026-10-16T22:32 IST over Greystones bbox).
  */
 export const INITIAL_PUBLIC_BINS: PublicBin[] = [
@@ -252,7 +253,6 @@ export const INITIAL_PUBLIC_BINS: PublicBin[] = [
     lastConfirmedAt: '2026-10-10T15:00:00Z',
     capacityStatus: 'SERVICED',
   },
-  // 5 OSM recycling bring-banks (included in GeoJSON for completeness)
   {
     id: 'bin-rec-01',
     code: 'Bring Bank #R-01',
@@ -284,10 +284,7 @@ export const INITIAL_PUBLIC_BINS: PublicBin[] = [
 ];
 
 /**
- * Seeded realistic Greystones dog-fouling reports demonstrating:
- * 1) High concentration right beside council bins on South Beach Prom, Church Rd, and Harbour (3m - 14m from bins!)
- * 2) Direct impact on wheelchair users (♿), parents with buggies (👶), and pedestrians stepping in it (👟)
- * 3) Outer estates/trails (Cliff Walk, Kindlestown, Charlesland) >250m from any bin
+ * Pre-seeded Greystones demo reports (tagged `isSeededDemo: true` so they can be cleared out in 1 click for production).
  */
 export const INITIAL_REPORTS: FoulingReport[] = [
   {
@@ -303,13 +300,14 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 6,
     note: 'Completely avoidable — council bin #G-14 was 4m away and verified empty! Wheels tracked straight into our home hallway.',
-    reporterInitials: 'SK',
+    submitterToken: generateAnonymousSubmitterToken('A14201'),
     nearestBinId: 'bin-sb-14',
     nearestBinCode: 'Bin #G-14',
     dBinAllM: 4,
     dBinVerifiedM: 4,
     hasPhoto: true,
     photoCaption: 'Promenade concrete slab 4m south of Bin #G-14',
+    isSeededDemo: true,
   },
   {
     id: 'rep-141',
@@ -324,11 +322,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 4,
     note: 'Stepped right in it walking to the DART in the dark. 7 metres from Bin #G-08.',
-    reporterInitials: 'CM',
+    submitterToken: generateAnonymousSubmitterToken('B14102'),
     nearestBinId: 'bin-cr-08',
     nearestBinCode: 'Bin #G-08',
     dBinAllM: 7,
     dBinVerifiedM: 7,
+    isSeededDemo: true,
   },
   {
     id: 'rep-140',
@@ -343,13 +342,14 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 5,
     note: 'Front buggy wheel rolled straight through fresh mess right at the park gate, 9m from Bin #G-07.',
-    reporterInitials: 'AoB',
+    submitterToken: generateAnonymousSubmitterToken('C14003'),
     nearestBinId: 'bin-cr-07',
     nearestBinCode: 'Bin #G-07',
     dBinAllM: 9,
     dBinVerifiedM: 9,
     hasPhoto: true,
     photoCaption: 'Buggy tyre track at Burnaby Park footpath entrance',
+    isSeededDemo: true,
   },
   {
     id: 'rep-139',
@@ -364,11 +364,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 3,
     note: 'Left in a tied plastic bag sitting 5 metres from Bin #G-13.',
-    reporterInitials: 'PR',
+    submitterToken: generateAnonymousSubmitterToken('D13904'),
     nearestBinId: 'bin-sb-13',
     nearestBinCode: 'Bin #G-13',
     dBinAllM: 5,
     dBinVerifiedM: 5,
+    isSeededDemo: true,
   },
   {
     id: 'rep-138',
@@ -383,11 +384,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 4,
     note: 'Narrow underpass pinch-point — impossible to dodge with a double buggy. Bin #G-15 is 6m away.',
-    reporterInitials: 'ED',
+    submitterToken: generateAnonymousSubmitterToken('E13805'),
     nearestBinId: 'bin-sb-15',
     nearestBinCode: 'Bin #G-15',
     dBinAllM: 6,
     dBinVerifiedM: 6,
+    isSeededDemo: true,
   },
   {
     id: 'rep-137',
@@ -402,11 +404,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 2,
     note: 'Right beside the harbour bench and 6m from Bin #G-05.',
-    reporterInitials: 'DK',
+    submitterToken: generateAnonymousSubmitterToken('F13706'),
     nearestBinId: 'bin-hm-05',
     nearestBinCode: 'Bin #G-05',
     dBinAllM: 6,
     dBinVerifiedM: 6,
+    isSeededDemo: true,
   },
   {
     id: 'rep-136',
@@ -421,11 +424,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 3,
     note: 'Child stepped in it running along the marina boardwalk, 8m from Bin #G-06.',
-    reporterInitials: 'LM',
+    submitterToken: generateAnonymousSubmitterToken('113607'),
     nearestBinId: 'bin-hm-06',
     nearestBinCode: 'Bin #G-06',
     dBinAllM: 8,
     dBinVerifiedM: 8,
+    isSeededDemo: true,
   },
   {
     id: 'rep-135',
@@ -440,11 +444,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 2,
     note: 'Large mess left middle of promenade, 6m from Bin #G-11.',
-    reporterInitials: 'NO',
+    submitterToken: generateAnonymousSubmitterToken('213508'),
     nearestBinId: 'bin-sb-11',
     nearestBinCode: 'Bin #G-11',
     dBinAllM: 6,
     dBinVerifiedM: 6,
+    isSeededDemo: true,
   },
   {
     id: 'rep-134',
@@ -459,11 +464,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 3,
     note: 'Right at the steps down to the swimmers at The Cove. 5m from Bin #G-01.',
-    reporterInitials: 'GF',
+    submitterToken: generateAnonymousSubmitterToken('313409'),
     nearestBinId: 'bin-cv-01',
     nearestBinCode: 'Bin #G-01',
     dBinAllM: 5,
     dBinVerifiedM: 5,
+    isSeededDemo: true,
   },
   {
     id: 'rep-133',
@@ -478,11 +484,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 7,
     note: 'On the dropped kerb tactile paving outside DART station — 7m from Bin #G-16. Wheelchair users have no way around.',
-    reporterInitials: 'BM',
+    submitterToken: generateAnonymousSubmitterToken('41330A'),
     nearestBinId: 'bin-cr-16',
     nearestBinCode: 'Bin #G-16',
     dBinAllM: 7,
     dBinVerifiedM: 7,
+    isSeededDemo: true,
   },
   {
     id: 'rep-132',
@@ -497,11 +504,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 2,
     note: 'Another pile 6m from Bin #G-10.',
-    reporterInitials: 'TH',
+    submitterToken: generateAnonymousSubmitterToken('51320B'),
     nearestBinId: 'bin-sb-10',
     nearestBinCode: 'Bin #G-10',
     dBinAllM: 6,
     dBinVerifiedM: 6,
+    isSeededDemo: true,
   },
   {
     id: 'rep-131',
@@ -516,13 +524,13 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 3,
     note: 'Right on the buggy ramp to Ladies Cove, 8m from Bin #G-04.',
-    reporterInitials: 'CR',
+    submitterToken: generateAnonymousSubmitterToken('61310C'),
     nearestBinId: 'bin-hm-04',
     nearestBinCode: 'Bin #G-04',
     dBinAllM: 8,
     dBinVerifiedM: 8,
+    isSeededDemo: true,
   },
-  // Reports in areas genuinely far from any bin (>200m) so the analysis is balanced & honest
   {
     id: 'rep-130',
     createdAt: '2026-10-15T14:00:00Z',
@@ -536,11 +544,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 5,
     note: 'Multiple bags hung on bushes at the Cliff Walk gate — nearest bin is 235m back at the Marina.',
-    reporterInitials: 'JW',
+    submitterToken: generateAnonymousSubmitterToken('71300D'),
     nearestBinId: 'bin-hm-06',
     nearestBinCode: 'Bin #G-06',
     dBinAllM: 235,
     dBinVerifiedM: 235,
+    isSeededDemo: true,
   },
   {
     id: 'rep-129',
@@ -555,11 +564,12 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 4,
     note: 'School walk route through Kindlestown has zero dog bins (445m to nearest bin). Kids stepping in it daily.',
-    reporterInitials: 'MC',
+    submitterToken: generateAnonymousSubmitterToken('81290E'),
     nearestBinId: 'bin-cr-19',
     nearestBinCode: 'Bin #G-19',
     dBinAllM: 445,
     dBinVerifiedM: 830,
+    isSeededDemo: true,
   },
   {
     id: 'rep-128',
@@ -574,38 +584,15 @@ export const INITIAL_REPORTS: FoulingReport[] = [
     status: 'spotted',
     confirmations: 6,
     note: 'Buggy wheel hit on the main Charlesland greenway — 910m from the nearest South Beach bin.',
-    reporterInitials: 'SH',
+    submitterToken: generateAnonymousSubmitterToken('91280F'),
     nearestBinId: 'bin-cv-01',
     nearestBinCode: 'Bin #G-01',
     dBinAllM: 910,
     dBinVerifiedM: 910,
-  },
-  {
-    id: 'rep-127',
-    createdAt: '2026-10-14T12:15:00Z',
-    lat: 53.14441,
-    lng: -6.06055,
-    accuracyM: 2.0,
-    streetName: 'South Beach Promenade (Cleared by Tidy Towns)',
-    areaName: 'South Beach Prom',
-    h3Cell: '891e2040c18ffff',
-    severity: 'just_poop',
-    status: 'cleared',
-    confirmations: 2,
-    note: 'Cleared by volunteer on morning walk — 9m from Bin #G-14.',
-    reporterInitials: 'TT',
-    nearestBinId: 'bin-sb-14',
-    nearestBinCode: 'Bin #G-14',
-    dBinAllM: 9,
-    dBinVerifiedM: 9,
-    clearedAt: '2026-10-15T08:30:00Z',
+    isSeededDemo: true,
   },
 ];
 
-/**
- * Official 6 Greystones Municipal District Councillors + Wicklow Co. Council Environmental Contacts
- * Verified from PRD.md & index (1).html
- */
 export const GREYSTONES_COUNCILLORS: Councillor[] = [
   {
     id: 'cllr-stokes',
@@ -724,9 +711,6 @@ export const COUNCIL_CC_CONTACTS = [
   },
 ];
 
-/**
- * Verified Irish Statutes & Wicklow Policy Citations from PRD Section 4 (Graph Node N9)
- */
 export const VERIFIED_CITATIONS: LegalCitation[] = [
   {
     id: 'L1',

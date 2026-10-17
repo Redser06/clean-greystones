@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   COUNCIL_CC_CONTACTS,
   EMAIL_TEMPLATES,
@@ -11,7 +11,6 @@ import {
 import {
   EmailTemplateId,
   FoulingReport,
-  GraphRunSummary,
   PublicBin,
   SeverityType,
 } from './types';
@@ -21,43 +20,47 @@ import {
   computeBinsVsFoulingAnalysis,
   computeGreystonesCell,
   findNearestBins,
+  getOrCreateSubmitterToken,
   inferGreystonesLocation,
   selectVerifiedCitations,
 } from './utils/graphEngine';
 import { GreystonesMapView } from './components/GreystonesMapView';
 
-type ActiveTab = 'map' | 'report' | 'bins' | 'council';
+type BottomNavTab = 'map' | 'insights' | 'council';
+type HamburgerPage = 'none' | 'bins_stats' | 'legal_bylaws' | 'watchdog' | 'data_admin';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('map');
+  const [activeTab, setActiveTab] = useState<BottomNavTab>('map');
+  const [hamburgerOpen, setHamburgerOpen] = useState<boolean>(false);
+  const [hamburgerPage, setHamburgerPage] = useState<HamburgerPage>('none');
+
   const [reports, setReports] = useState<FoulingReport[]>(INITIAL_REPORTS);
-  const [bins, setBins] = useState<PublicBin[]>(INITIAL_PUBLIC_BINS);
+  const [bins] = useState<PublicBin[]>(INITIAL_PUBLIC_BINS);
 
-  // Map Filter & Overlay States
+  // Unique provable anonymous device token (no logins, no PII)
+  const [submitterToken] = useState<string>(() => getOrCreateSubmitterToken());
+
+  // Map Filter & Background Bin Toggle (bins run in background by default so map isn't cluttered)
   const [mapFilter, setMapFilter] = useState<'all' | 'near_bins' | 'wheels' | 'stepped_in'>('all');
-  const [showBinOverlay, setShowBinOverlay] = useState<boolean>(true);
-  const [showProximityLines, setShowProximityLines] = useState<boolean>(true);
+  const [showBinOverlayOnMap, setShowBinOverlayOnMap] = useState<boolean>(false);
 
-  // Simple 1-Tap Mode vs Detailed Mode
-  const [quickOneTapMode, setQuickOneTapMode] = useState<boolean>(true);
+  // 1-Tap Hero Map State + Optional Post-Tap Details Sheet
   const [selectedSeverity, setSelectedSeverity] = useState<SeverityType>('just_poop');
   const [draftCoords, setDraftCoords] = useState<{ lat: number; lng: number }>({
     lat: 53.14431,
     lng: -6.06047,
   });
-  const [draftNote, setDraftNote] = useState<string>('');
-  const [draftReporterInitials, setDraftReporterInitials] = useState<string>('CR');
-
-  // Selected Pin or Bin on Map
-  const [selectedReport, setSelectedReport] = useState<FoulingReport | null>(INITIAL_REPORTS[0]);
-  const [selectedBin, setSelectedBin] = useState<PublicBin | null>(null);
-
-  // Toast / Instant 1-Tap Feedback + Graph Engine Audit Trace
+  const [selectedReport, setSelectedReport] = useState<FoulingReport | null>(null);
   const [lastLoggedReport, setLastLoggedReport] = useState<FoulingReport | null>(null);
-  const [lastGraphRun, setLastGraphRun] = useState<GraphRunSummary | null>(null);
-  const [noteWarnings, setNoteWarnings] = useState<string[]>([]);
 
-  // Email Builder States
+  // Optional Extra Step Modal ("Add details / photo") after 1-Tap log
+  const [expandOptionalReportModal, setExpandOptionalReportModal] = useState<boolean>(false);
+  const [optionalNote, setOptionalNote] = useState<string>('');
+  const [optionalPhotoPreview, setOptionalPhotoPreview] = useState<string | null>(null);
+  const [noteWarnings, setNoteWarnings] = useState<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Email Builder State
   const [selectedCouncillorIds, setSelectedCouncillorIds] = useState<string[]>(
     GREYSTONES_COUNCILLORS.filter((c) => c.isDefaultSelected).map((c) => c.id)
   );
@@ -65,19 +68,14 @@ export function App() {
     COUNCIL_CC_CONTACTS.filter((c) => c.defaultChecked).map((c) => c.id)
   );
   const [selectedTemplateId, setSelectedTemplateId] = useState<EmailTemplateId>('bin_mythbuster');
-  const [residentSignOff, setResidentSignOff] = useState<string>('A concerned Greystones resident');
+  const [residentSignOff, setResidentSignOff] = useState<string>('A Greystones resident');
   const [emailCopiedToast, setEmailCopiedToast] = useState<string>('');
-  const [emailsDispatchedCount, setEmailsDispatchedCount] = useState<number>(42);
+  const [emailsPreparedCount, setEmailsPreparedCount] = useState<number>(42);
 
-  // Add New Crowd Bin Modal State
-  const [newBinName, setNewBinName] = useState<string>('');
-  const [newBinKind, setNewBinKind] = useState<'general' | 'dog_waste' | 'bag_dispenser'>('general');
-  const [binAddedFeedback, setBinAddedFeedback] = useState<string>('');
-
-  // Graph Node N10: Real-time Bins vs Fouling Analysis
+  // Background Bins-vs-Fouling & Hotspot Intelligence (Node N10)
   const analysis = useMemo(() => computeBinsVsFoulingAnalysis(reports), [reports]);
+  const hasDemoSeeds = useMemo(() => reports.some((r) => r.isSeededDemo), [reports]);
 
-  // Draft Pin Location & Nearest Bin Calculation (Graph Nodes N5 + N6)
   const draftContext = useMemo(() => {
     const loc = inferGreystonesLocation(draftCoords.lat, draftCoords.lng);
     const nearest = findNearestBins(draftCoords.lat, draftCoords.lng, bins);
@@ -88,22 +86,8 @@ export function App() {
     };
   }, [draftCoords, bins]);
 
-  // Execute G1 Intake Graph to commit a new pin
-  const commitFoulingReport = (
-    lat: number,
-    lng: number,
-    severity: SeverityType,
-    noteText?: string
-  ) => {
-    if (noteText) {
-      const check = checkPiiAndGuardrails(noteText);
-      if (!check.ok) {
-        setNoteWarnings(check.warnings);
-        return;
-      }
-    }
-    setNoteWarnings([]);
-
+  // Instant 1-Tap Log on Map Click or Button Tap
+  const logReportImmediately = (lat: number, lng: number, severity: SeverityType) => {
     const loc = inferGreystonesLocation(lat, lng);
     const nearest = findNearestBins(lat, lng, bins);
     const h3Cell = computeGreystonesCell(lat, lng);
@@ -120,64 +104,96 @@ export function App() {
       severity,
       status: 'spotted',
       confirmations: 1,
-      note:
-        noteText && noteText.trim().length > 0
-          ? noteText.trim()
-          : `${SEVERITY_META[severity].label} logged at ${loc.streetName} (${nearest.dBinAllM}m from ${nearest.nearestAll.code}).`,
-      reporterInitials: draftReporterInitials || 'RES',
+      submitterToken,
       nearestBinId: nearest.nearestAll.id,
       nearestBinCode: nearest.nearestAll.code,
       dBinAllM: nearest.dBinAllM,
       dBinVerifiedM: nearest.dBinVerifiedM,
-    };
-
-    const graphRun: GraphRunSummary = {
-      runId: `run-${Date.now().toString(36)}`,
-      reportId: newReport.id,
-      timestamp: new Date().toLocaleTimeString(),
-      n1Validate: { ok: true, reason: 'Inside Greystones MD study polygon (±2.4m GPS)' },
-      n4Dedupe: { action: 'new' },
-      n5Snap: { snapped: true, street: loc.streetName },
-      n6BinDist: {
-        nearestBinCode: nearest.nearestAll.code,
-        distanceM: nearest.dBinAllM,
-        isNearBinMythbuster: nearest.dBinAllM <= 25,
-        promptType:
-          nearest.nearestAll.status === 'unverified' && nearest.dBinAllM <= 30
-            ? 'confirm_bin'
-            : nearest.dBinVerifiedM > 250
-            ? 'survey_cell'
-            : 'none',
-      },
-      n7Commit: { status: 'spotted' },
+      isSeededDemo: false,
     };
 
     setReports((prev) => [newReport, ...prev]);
     setSelectedReport(newReport);
-    setSelectedBin(null);
     setLastLoggedReport(newReport);
-    setLastGraphRun(graphRun);
-    setDraftNote('');
+    setOptionalNote('');
+    setOptionalPhotoPreview(null);
+    setNoteWarnings([]);
   };
 
-  // Handle clicking on the map
   const handleMapClickDropPin = (lat: number, lng: number) => {
     setDraftCoords({ lat, lng });
-    if (quickOneTapMode && activeTab === 'map') {
-      // In Simple 1-Tap Mode, clicking the map immediately drops a poop pin!
-      commitFoulingReport(lat, lng, selectedSeverity);
+    logReportImmediately(lat, lng, selectedSeverity);
+  };
+
+  // Update the just-logged report when the user changes severity chip or attaches optional note/photo
+  const handleSeverityChange = (sev: SeverityType) => {
+    setSelectedSeverity(sev);
+    if (lastLoggedReport) {
+      setReports((prev) =>
+        prev.map((r) => (r.id === lastLoggedReport.id ? { ...r, severity: sev } : r))
+      );
+      setLastLoggedReport((prev) => (prev ? { ...prev, severity: sev } : null));
     }
   };
 
-  // Undo last quick drop
+  const handleSaveOptionalDetails = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lastLoggedReport) return;
+
+    if (optionalNote.trim()) {
+      const check = checkPiiAndGuardrails(optionalNote);
+      if (!check.ok) {
+        setNoteWarnings(check.warnings);
+        return;
+      }
+    }
+    setNoteWarnings([]);
+
+    setReports((prev) =>
+      prev.map((r) =>
+        r.id === lastLoggedReport.id
+          ? {
+              ...r,
+              note: optionalNote.trim() || r.note,
+              hasPhoto: Boolean(optionalPhotoPreview) || r.hasPhoto,
+              photoDataUrl: optionalPhotoPreview ?? r.photoDataUrl,
+            }
+          : r
+      )
+    );
+    setLastLoggedReport((prev) =>
+      prev
+        ? {
+            ...prev,
+            note: optionalNote.trim() || prev.note,
+            hasPhoto: Boolean(optionalPhotoPreview) || prev.hasPhoto,
+            photoDataUrl: optionalPhotoPreview ?? prev.photoDataUrl,
+          }
+        : null
+    );
+    setExpandOptionalReportModal(false);
+  };
+
+  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setOptionalPhotoPreview(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleUndoLastDrop = () => {
     if (!lastLoggedReport) return;
     setReports((prev) => prev.filter((r) => r.id !== lastLoggedReport.id));
     setLastLoggedReport(null);
-    setSelectedReport(reports[1] ?? null);
+    setSelectedReport(null);
+    setExpandOptionalReportModal(false);
   };
 
-  // "Me Too" / Confirm an existing pin (Graph Node N4 Dedupe)
   const handleConfirmExistingReport = (reportId: string) => {
     setReports((prev) =>
       prev.map((r) =>
@@ -191,93 +207,21 @@ export function App() {
     }
   };
 
-  // Mark an existing pin as Cleared (Tidy Towns / Resident cleanup)
-  const handleToggleClearedReport = (reportId: string) => {
-    setReports((prev) =>
-      prev.map((r) => {
-        if (r.id !== reportId) return r;
-        const nextStatus = r.status === 'cleared' ? 'spotted' : 'cleared';
-        return {
-          ...r,
-          status: nextStatus,
-          clearedAt: nextStatus === 'cleared' ? new Date().toISOString() : undefined,
-        };
-      })
-    );
-    if (selectedReport?.id === reportId) {
-      setSelectedReport((prev) =>
-        prev
-          ? {
-              ...prev,
-              status: prev.status === 'cleared' ? 'spotted' : 'cleared',
-            }
-          : null
-      );
-    }
+  // Demo vs Production Seed Management
+  const handleClearSeededDemoData = () => {
+    setReports((prev) => prev.filter((r) => !r.isSeededDemo));
+    setSelectedReport(null);
+    setLastLoggedReport(null);
   };
 
-  // Graph G2: Vote to confirm or dispute a public bin
-  const handleVoteBin = (binId: string, vote: 'yes' | 'no' | 'dog_bin') => {
-    setBins((prev) =>
-      prev.map((b) => {
-        if (b.id !== binId) return b;
-        const yesVotes = vote === 'yes' || vote === 'dog_bin' ? b.yesVotes + 1 : b.yesVotes;
-        const noVotes = vote === 'no' ? b.noVotes + 1 : b.noVotes;
-        const status =
-          yesVotes >= 2
-            ? 'verified'
-            : noVotes >= 2 && noVotes > yesVotes
-            ? 'disputed'
-            : b.status;
-        return {
-          ...b,
-          yesVotes,
-          noVotes,
-          status,
-          kind: vote === 'dog_bin' ? 'dog_waste' : b.kind,
-          lastConfirmedAt: new Date().toISOString(),
-        };
-      })
-    );
-    if (selectedBin?.id === binId) {
-      setSelectedBin((prev) =>
-        prev
-          ? {
-              ...prev,
-              yesVotes: vote !== 'no' ? prev.yesVotes + 1 : prev.yesVotes,
-              status: 'verified',
-            }
-          : null
-      );
-    }
+  const handleRestoreSeededDemoData = () => {
+    setReports((prev) => {
+      const userLogged = prev.filter((r) => !r.isSeededDemo);
+      return [...userLogged, ...INITIAL_REPORTS];
+    });
   };
 
-  // Add crowd-sourced bin at current draft pin
-  const handleAddCrowdBin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const label =
-      newBinName.trim() || `${draftContext.streetName} Crowd Bin`;
-    const newBin: PublicBin = {
-      id: `bin-crowd-${Date.now()}`,
-      code: `Bin #C-${bins.length + 1}`,
-      lat: draftCoords.lat,
-      lng: draftCoords.lng,
-      locationName: label,
-      kind: newBinKind,
-      source: 'crowd',
-      status: 'unverified',
-      yesVotes: 1,
-      noVotes: 0,
-      lastConfirmedAt: new Date().toISOString(),
-      capacityStatus: 'SERVICED',
-    };
-    setBins((prev) => [newBin, ...prev]);
-    setNewBinName('');
-    setBinAddedFeedback(`Added ${newBin.code} (${label}) at ${draftCoords.lat.toFixed(4)}, ${draftCoords.lng.toFixed(4)}!`);
-    setTimeout(() => setBinAddedFeedback(''), 4000);
-  };
-
-  // Email Builder (Graph Node E1 + N9 Verified Citations + N10 Auto-Stats)
+  // Email Builder (Graph Node E1 + N9 + N10)
   const currentTemplate = useMemo(
     () => EMAIL_TEMPLATES.find((t) => t.id === selectedTemplateId) ?? EMAIL_TEMPLATES[0],
     [selectedTemplateId]
@@ -302,59 +246,59 @@ export function App() {
     ).map((c) => c.email);
 
     const topHotspot = analysis.nearBinHotspots[0]?.areaName ?? 'South Beach Promenade';
-    const focusReport = selectedReport ?? reports[0];
+    const focusReport = selectedReport ?? lastLoggedReport ?? reports[0];
 
-    let subject = `[Greystones Civic Audit] Dog Fouling Action Needed — ${analysis.totalActiveReports} Mapped Incidents (${analysis.nearBin50mPct}% Near Bins)`;
-    let introParagraph = `I am writing as a resident of Greystones to raise urgent frustration over the volume and frequency of dog fouling across our footpaths, seafront promenade, and public spaces.`;
+    let subject = `Dog Fouling in Greystones — ${analysis.totalActiveReports} Mapped Reports (${analysis.nearBin50mPct}% Within 50m of a Bin)`;
+    let introParagraph = `I am writing as a resident of Greystones, Co. Wicklow to raise urgent frustration over the volume and frequency of dog fouling across our footpaths, seafront promenade, and public spaces.`;
 
     if (selectedTemplateId === 'bin_mythbuster') {
-      subject = `[Council Myth-Buster] ${analysis.nearBin50mPct}% of Greystones Dog Fouling Occurs Within 50m of a Public Bin`;
-      introParagraph = `I am submitting empirical community evidence from the Clean Greystones Dog Fouling & Bin Audit Map. Any claim that dog fouling on our main routes is caused by a "long walk to a bin" is disproven by the map: ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} active incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a public bin, and ${analysis.nearBin50mPct}% occurred within 50 metres.`;
+      subject = `Greystones Dog Fouling Evidence: ${analysis.nearBin50mPct}% of Mapped Fouling Occurs Within 50m of a Public Bin`;
+      introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${analysis.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
     } else if (selectedTemplateId === 'wheel_contamination') {
-      subject = `[Accessibility & Hygiene Hazard] ${analysis.highImpactCount} Buggy, Wheelchair & Footpath Contaminations in Greystones`;
-      introParagraph = `Fed up with dog waste on footpaths, buggy wheels, and wheelchair wheels, residents have now geo-tagged ${analysis.totalActiveReports} incidents across Greystones — including ${analysis.bySeverity.wheelchair_wheels.count} direct wheelchair roll-throughs (♿), ${analysis.bySeverity.buggy_wheels.count} buggy/stroller wheel hits (👶), and ${analysis.bySeverity.stepped_in.count} pedestrian shoe contaminations (👟).`;
+      subject = `Footpath Accessibility Hazard: ${analysis.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
+      introParagraph = `Residents have logged ${analysis.totalActiveReports} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs (♿), ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations (👶), and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits (👟).`;
     } else if (selectedTemplateId === 'request_bin') {
-      subject = `[Infrastructure Gap] Request for Dog-Waste Bins at Unserved Greystones Walking Routes (>200m from any bin)`;
-      introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit of OpenStreetMap and resident walks shows 0 dedicated dog-waste bins in the town and severe >200m bin gaps in outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
+      subject = `Request for Dog-Waste Bins on Unserved Greystones Walking Routes (>200m from any bin)`;
+      introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit shows 0 dedicated dog-waste bins in the town and >200m bin gaps on outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
     }
 
     const latestFocusBlock = focusReport
-      ? `Latest Focus Incident (${focusReport.id.toUpperCase()}):
+      ? `Logged Incident Reference (${focusReport.id.toUpperCase()} · Submitter ${focusReport.submitterToken}):
 • Location: ${focusReport.streetName} (${focusReport.lat.toFixed(4)}° N, ${Math.abs(focusReport.lng).toFixed(4)}° W)
-• Impact Severity: ${SEVERITY_META[focusReport.severity].emoji} ${SEVERITY_META[focusReport.severity].label}
-• Distance to Nearest Council Bin: ${focusReport.dBinAllM} metres from ${focusReport.nearestBinCode}
-• Resident Note: "${focusReport.note}"`
+• Impact: ${SEVERITY_META[focusReport.severity].emoji} ${SEVERITY_META[focusReport.severity].label}
+• Distance to Nearest Public Bin: ${focusReport.dBinAllM} metres (${focusReport.nearestBinCode})${
+          focusReport.note ? `\n• Note: "${focusReport.note}"` : ''
+        }`
       : '';
 
     const citationsBlock = activeCitations
       .map((c) => `• ${c.code}: "${c.quote}"`)
       .join('\n');
 
-    const body = `Dear Greystones Municipal District Councillors,
+    const body = `Dear Councillors,
 
 ${introParagraph}
 
-KEY TELEMETRY FROM CLEAN GREYSTONES LIVE MAP:
-• Total Active Geo-Tagged Reports: ${analysis.totalActiveReports} incidents across Greystones
-• Council Bin Proximity (Myth-Buster): ${analysis.nearBin15mPct}% (${analysis.nearBin15mCount} reports) are within 15m of a bin; ${analysis.nearBin50mPct}% are within 50m of a bin.
-• Direct Physical Contamination: ${analysis.highImpactCount} incidents (${analysis.highImpactPct}%) involved wheelchair wheels (♿ ${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (👶 ${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (👟 ${analysis.bySeverity.stepped_in.count}).
-• Primary Hotspot Beside Bins: ${topHotspot} (fouling repeatedly logged 4m–9m from serviced bins).
-• Unserved Outer Routes (>200m from any bin): Kindlestown Woods, Charlesland Spine Path, and Cliff Walk Trailhead (${analysis.gt200mCount} reports >200m from a bin).
+SUMMARY OF MAPPED GREYSTONES EVIDENCE:
+• Active Geo-Tagged Reports: ${analysis.totalActiveReports} incidents across ${analysis.distinctSubmitters} distinct anonymous resident tokens
+• Bin Proximity (Background Audit): ${analysis.nearBin15mPct}% (${analysis.nearBin15mCount} reports) are within 15m of a bin; ${analysis.nearBin50mPct}% are within 50m of a bin.
+• Direct Wheel & Shoe Impact: ${analysis.highImpactCount} incidents (${analysis.highImpactPct}%) involved wheelchair wheels (♿ ${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (👶 ${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (👟 ${analysis.bySeverity.stepped_in.count}).
+• Primary Hotspot Beside Bins: ${topHotspot}
+• Unserved Outer Routes (>200m from a bin): Kindlestown Woods, Charlesland Spine Path, and Cliff Walk Start (${analysis.gt200mCount} reports).
 
 ${latestFocusBlock}
 
-STATUTORY & POLICY BASIS (VERIFIED):
+STATUTORY & POLICY BASIS:
 ${citationsBlock}
 
-PRACTICAL ACTION REQUESTED AT THE NEXT GREYSTONES MD MEETING:
-1. Targeted Warden Patrols: Deploy authorised litter/dog wardens and Greystones parking wardens (authorised under the Litter Pollution Acts per the 2026–2029 Plan) during peak dog-walking windows (Sat/Sun 08:00–13:00) on South Beach Promenade, Harbour Marina, and Church Road to enforce the €250 on-the-spot fine.
-2. Infrastructure & Bin Audit: Publish Wicklow County Council's internal litter/dog-bin asset register for Greystones MD and install dedicated dog-waste bins at Kindlestown, Charlesland, and the Cliff Walk start.
+REQUESTED ACTION AT THE NEXT GREYSTONES MD MEETING:
+1. Targeted Warden Patrols: Deploy authorised litter/dog wardens and Greystones parking wardens during peak dog-walking windows (Sat/Sun 08:00–13:00) on South Beach Promenade, Harbour Marina, and Church Road to enforce the €250 on-the-spot fine.
+2. Bin Gaps on Outer Walks: Install dedicated dog-waste bins at Kindlestown, Charlesland, and the Cliff Walk start.
 3. Transparent Reporting: Separately record and publish s.22 dog-fouling fines issued in Greystones Municipal District.
 
-We need meaningful enforcement and solutions, not simply more warning signs.
-
 Kind regards,
-${residentSignOff}`;
+${residentSignOff}
+(Anonymous Verification ID: ${submitterToken})`;
 
     const mailtoHref = `mailto:${toEmails.join(',')}?cc=${encodeURIComponent(
       ccEmails.join(',')
@@ -373,7 +317,6 @@ ${residentSignOff}`;
       body,
       mailtoHref,
       gmailHref,
-      charLength: mailtoHref.length,
     };
   }, [
     selectedCouncillorIds,
@@ -381,9 +324,11 @@ ${residentSignOff}`;
     selectedTemplateId,
     analysis,
     selectedReport,
+    lastLoggedReport,
     reports,
     activeCitations,
     residentSignOff,
+    submitterToken,
   ]);
 
   const handleCopyFullEmail = async () => {
@@ -392,1369 +337,1105 @@ ${residentSignOff}`;
     )}\nSubject: ${generatedEmail.subject}\n\n${generatedEmail.body}`;
     try {
       await navigator.clipboard.writeText(fullText);
-      setEmailCopiedToast('Full email + councillor addresses copied to clipboard!');
-      setEmailsDispatchedCount((c) => c + 1);
-      setTimeout(() => setEmailCopiedToast(''), 4000);
+      setEmailCopiedToast('Email copied to clipboard');
+      setEmailsPreparedCount((c) => c + 1);
+      setTimeout(() => setEmailCopiedToast(''), 3500);
     } catch {
-      setEmailCopiedToast('Please select and copy the text from the preview box.');
+      setEmailCopiedToast('Select the preview text to copy');
     }
   };
 
-  return (
-    <div className="min-h-full h-full flex flex-col bg-background text-on-surface font-sans select-none">
-      {/* Top App Bar (Civic Tide Design System) */}
-      <header className="bg-surface shadow-sm z-40 shrink-0 border-b border-slate-200/80">
-        <div className="flex justify-between items-center w-full px-4 py-2.5 max-w-screen-xl mx-auto">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-primary text-white flex items-center justify-center shadow-sm">
-              <span className="material-symbols-outlined text-[22px]">location_on</span>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-display text-lg sm:text-xl font-extrabold text-on-surface tracking-tight">
-                  Clean Greystones
-                </h1>
-                <span className="bg-primary/10 text-primary font-display text-[10px] px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider">
-                  LIVE EVIDENCE
-                </span>
-              </div>
-              <p className="text-xs text-on-surface-variant flex items-center gap-1.5">
-                <span>Greystones, Co. Wicklow</span>
-                <span className="text-outline-variant">•</span>
-                <span className="text-primary font-semibold">
-                  {analysis.nearBin50mPct}% of Poos ≤50m from a Bin
-                </span>
-              </p>
-            </div>
-          </div>
+  const openHamburgerDestination = (page: HamburgerPage) => {
+    setHamburgerPage(page);
+    setHamburgerOpen(false);
+  };
 
-          {/* Right Live Counter & Quick Campaign Action */}
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 bg-error-container text-on-error-container px-3 py-1.5 rounded-full border border-error/20 shadow-xs">
-              <span className="w-2 h-2 rounded-full bg-error animate-ping" />
-              <span className="font-display text-xs font-extrabold whitespace-nowrap">
-                {analysis.totalActiveReports} Mapped Poos
-              </span>
-            </div>
+  return (
+    <div className="min-h-full h-full flex flex-col bg-canvas text-ink font-sans select-none">
+      {/* Compact Professional Top Header */}
+      <header className="bg-white border-b border-line z-40 shrink-0">
+        <div className="flex justify-between items-center w-full px-3.5 py-2.5 max-w-screen-xl mx-auto">
+          <div className="flex items-center gap-2.5">
             <button
               type="button"
-              onClick={() => setActiveTab('council')}
-              className="hidden sm:flex items-center gap-1.5 bg-[#d97706] hover:bg-[#b45309] text-white px-3.5 py-1.5 rounded-full font-display text-xs font-bold shadow-sm transition-transform active:scale-95"
+              onClick={() => {
+                setHamburgerPage('none');
+                setActiveTab('map');
+              }}
+              className="flex items-center gap-2 text-left"
             >
-              <span className="material-symbols-outlined text-[16px]">campaign</span>
-              <span>Bombard Council (6 Cllrs)</span>
+              <div className="w-8 h-8 rounded-xl bg-primary text-white flex items-center justify-center shadow-xs">
+                <span className="text-base">💩</span>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-display text-base sm:text-lg font-bold text-ink tracking-tight">
+                    Clean Greystones
+                  </span>
+                  <span className="hidden sm:inline-block bg-canvas border border-line text-muted font-mono text-[10px] px-2 py-0.5 rounded-full font-semibold">
+                    {submitterToken}
+                  </span>
+                </div>
+              </div>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Live Count Pill */}
+            <button
+              type="button"
+              onClick={() => {
+                setHamburgerPage('none');
+                setActiveTab('insights');
+              }}
+              className="flex items-center gap-1.5 bg-canvas hover:bg-surface-container px-2.5 py-1.5 rounded-full border border-line text-xs font-semibold text-ink transition-colors"
+            >
+              <span className="w-2 h-2 rounded-full bg-primary" />
+              <span>{analysis.totalActiveReports} logged</span>
+              <span className="text-muted hidden sm:inline">
+                ({analysis.nearBin50mPct}% ≤50m bin)
+              </span>
+            </button>
+
+            {/* Hamburger Menu Button for Background Info (Bins & Stats, Legal & Bye-Laws, Watchdog, Demo/Prod Data) */}
+            <button
+              type="button"
+              onClick={() => setHamburgerOpen((v) => !v)}
+              aria-label="Open background information menu"
+              className="w-9 h-9 rounded-xl border border-line bg-white hover:bg-canvas flex items-center justify-center text-ink active:scale-95 transition-transform"
+            >
+              <span className="material-symbols-outlined text-[20px]">
+                {hamburgerOpen ? 'close' : 'menu'}
+              </span>
             </button>
           </div>
         </div>
       </header>
 
-      {/* ==================== TAB 1: INTERACTIVE GOOGLE MAP + 1-TAP LOG MODE ==================== */}
-      {activeTab === 'map' && (
-        <div className="flex-1 flex flex-col overflow-hidden relative">
-          {/* Sub-header Filter Bar + Simple 1-Tap Mode Toggle */}
-          <section className="bg-surface-container-lowest/95 backdrop-blur-md px-3 sm:px-4 py-2 z-30 shadow-xs border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
-            {/* Filter Pills */}
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
-              <button
-                type="button"
-                onClick={() => setMapFilter('all')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-display font-bold shrink-0 transition-all ${
-                  mapFilter === 'all'
-                    ? 'bg-primary text-on-primary shadow-sm'
-                    : 'bg-surface-container-low text-on-surface-variant border border-outline-variant/60'
-                }`}
-              >
-                <span>All Poos</span>
-                <span className="bg-black/15 px-1.5 py-0.2 rounded-full text-[10px]">
-                  {analysis.totalActiveReports}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setMapFilter('near_bins')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-display font-bold shrink-0 transition-all ${
-                  mapFilter === 'near_bins'
-                    ? 'bg-primary text-on-primary shadow-sm'
-                    : 'bg-surface-container-low text-on-surface-variant border border-outline-variant/60'
-                }`}
-              >
-                <span>🗑️ Near Bins (≤25m)</span>
-                <span className="bg-emerald-700/20 text-emerald-950 px-1.5 py-0.2 rounded-full text-[10px] font-extrabold">
-                  {analysis.nearBin15mCount} ({analysis.nearBin15mPct}%)
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setMapFilter('wheels')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-display font-bold shrink-0 transition-all ${
-                  mapFilter === 'wheels'
-                    ? 'bg-error text-white shadow-sm'
-                    : 'bg-surface-container-low text-on-surface-variant border border-outline-variant/60'
-                }`}
-              >
-                <span>♿ 👶 Buggy / Wheelchair</span>
-                <span className="bg-black/10 px-1.5 py-0.2 rounded-full text-[10px] font-bold">
-                  {analysis.bySeverity.buggy_wheels.count +
-                    analysis.bySeverity.wheelchair_wheels.count}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setMapFilter('stepped_in')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-display font-bold shrink-0 transition-all ${
-                  mapFilter === 'stepped_in'
-                    ? 'bg-error text-white shadow-sm'
-                    : 'bg-error-container/40 text-on-error-container border border-error/20'
-                }`}
-              >
-                <span>👟 Stepped In</span>
-                <span className="bg-error/20 text-error px-1.5 py-0.2 rounded-full text-[10px] font-bold">
-                  {analysis.bySeverity.stepped_in.count}
-                </span>
-              </button>
-            </div>
-
-            {/* Bin Overlay & 1-Tap Mode Switcher */}
-            <div className="flex items-center gap-2 ml-auto">
-              <button
-                type="button"
-                onClick={() => setShowBinOverlay((v) => !v)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-display font-bold border flex items-center gap-1 transition-all ${
-                  showBinOverlay
-                    ? 'bg-emerald-50 border-primary text-primary'
-                    : 'bg-slate-100 border-slate-300 text-slate-600'
-                }`}
-              >
-                <span>🗑️ Bins ({bins.length})</span>
-                <span>{showBinOverlay ? 'ON' : 'OFF'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowProximityLines((v) => !v)}
-                className={`hidden md:flex px-2.5 py-1 rounded-lg text-xs font-display font-bold border items-center gap-1 transition-all ${
-                  showProximityLines
-                    ? 'bg-red-50 border-error/50 text-error'
-                    : 'bg-slate-100 border-slate-300 text-slate-600'
-                }`}
-              >
-                <span>📏 Bin Tether Lines</span>
-              </button>
-
-              <div className="bg-slate-200/80 p-0.5 rounded-xl flex items-center">
+      {/* ==================== HAMBURGER SLIDE-OVER MENU ==================== */}
+      {hamburgerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-ink/40 backdrop-blur-xs">
+          <div className="w-full max-w-xs bg-white h-full shadow-2xl border-l border-line flex flex-col justify-between p-4 overflow-y-auto">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-line">
+                <div>
+                  <p className="font-display text-sm font-bold text-ink">
+                    Background & Reference
+                  </p>
+                  <p className="text-xs text-muted">
+                    Bins data, Irish law & council records
+                  </p>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setQuickOneTapMode(true)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-display font-bold flex items-center gap-1 transition-all ${
-                    quickOneTapMode
-                      ? 'bg-white text-primary shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                  onClick={() => setHamburgerOpen(false)}
+                  className="w-8 h-8 rounded-lg hover:bg-canvas flex items-center justify-center text-muted"
                 >
-                  <span>⚡ 1-Tap Click Map</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setQuickOneTapMode(false)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-display font-bold flex items-center gap-1 transition-all ${
-                    !quickOneTapMode
-                      ? 'bg-white text-primary shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <span>🎯 Position Pin</span>
+                  ✕
                 </button>
               </div>
-            </div>
-          </section>
 
-          {/* Main Map Viewport */}
-          <div className="relative flex-1 flex flex-col overflow-hidden">
-            <GreystonesMapView
-              reports={reports}
-              bins={bins}
-              activeFilter={mapFilter}
-              showBinOverlay={showBinOverlay}
-              showProximityLines={showProximityLines}
-              selectedReport={selectedReport}
-              onSelectReport={setSelectedReport}
-              selectedBin={selectedBin}
-              onSelectBin={setSelectedBin}
-              draftCoords={draftCoords}
-              onMapClickDropPin={handleMapClickDropPin}
-              quickOneTapMode={quickOneTapMode}
-              quickSeverity={selectedSeverity}
-            />
-
-            {/* Active Incident Callout Card (Floating Top-Left / Mobile Overlay) */}
-            {selectedReport && !selectedBin && (
-              <div className="absolute top-14 left-3 right-3 sm:right-auto sm:w-96 z-30 pointer-events-auto">
-                <div className="bg-surface-container-lowest/98 backdrop-blur-md rounded-2xl p-3.5 border-2 border-error/70 shadow-xl">
-                  <div className="flex items-start justify-between gap-2 mb-1.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="bg-error text-white font-display text-[11px] px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1">
-                        <span>
-                          {SEVERITY_META[selectedReport.severity].emoji}{' '}
-                          {SEVERITY_META[selectedReport.severity].shortLabel} #{selectedReport.id.replace('rep-', '')}
-                        </span>
-                      </span>
-                      <span className="bg-surface-container text-on-surface-variant font-display text-[10px] px-2 py-0.5 rounded-full font-semibold">
-                        {selectedReport.areaName}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedReport(null)}
-                      className="text-slate-400 hover:text-slate-700 text-xs font-bold px-1.5"
-                      aria-label="Close incident card"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  {/* Proximity to Bin Callout Banner */}
-                  <div
-                    className={`${
-                      selectedReport.dBinAllM <= 30
-                        ? 'bg-error-container/45 border-error/30 text-on-error-container'
-                        : 'bg-amber-50 border-amber-300 text-amber-950'
-                    } border rounded-xl p-2.5 mb-2 flex items-center justify-between`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">🗑️</span>
-                      <div>
-                        <p className="font-display text-xs font-extrabold leading-tight">
-                          {selectedReport.dBinAllM} metres from Council {selectedReport.nearestBinCode}
-                        </p>
-                        <p className="text-[11px] opacity-85">
-                          {selectedReport.dBinAllM <= 30
-                            ? 'Council cannot claim lack of bins here!'
-                            : 'Over 200m from nearest bin — bin gap area'}
-                        </p>
-                      </div>
-                    </div>
-                    <span
-                      className={`${
-                        selectedReport.dBinAllM <= 30 ? 'bg-error text-white' : 'bg-amber-700 text-white'
-                      } text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0`}
-                    >
-                      {selectedReport.dBinAllM <= 30 ? 'BESIDE BIN' : 'NO BIN NEARBY'}
-                    </span>
-                  </div>
-
-                  {selectedReport.note && (
-                    <p className="text-xs text-on-surface italic leading-snug mb-2.5">
-                      “{selectedReport.note}”
-                    </p>
-                  )}
-
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-200/80 gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-secondary/20 flex items-center justify-center text-[10px] font-bold text-secondary">
-                        {selectedReport.reporterInitials}
-                      </span>
-                      <span className="text-[11px] text-secondary font-medium">
-                        {selectedReport.confirmations} confirmations
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleConfirmExistingReport(selectedReport.id)}
-                        className="bg-surface-container hover:bg-surface-container-high text-on-surface text-[11px] font-display font-bold px-2.5 py-1 rounded-lg transition-colors"
-                      >
-                        👍 Me Too (+1)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleClearedReport(selectedReport.id)}
-                        className="bg-emerald-50 hover:bg-emerald-100 text-primary border border-primary/30 text-[11px] font-display font-bold px-2.5 py-1 rounded-lg transition-colors"
-                      >
-                        {selectedReport.status === 'cleared' ? 'Re-open' : '✅ Mark Cleared'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('council')}
-                        className="bg-[#d97706] hover:bg-[#b45309] text-white text-[11px] font-display font-bold px-2.5 py-1 rounded-lg transition-colors"
-                      >
-                        Email Cllrs →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Selected Bin Callout Card */}
-            {selectedBin && (
-              <div className="absolute top-14 left-3 right-3 sm:right-auto sm:w-96 z-30 pointer-events-auto">
-                <div className="bg-surface-container-lowest/98 backdrop-blur-md rounded-2xl p-3.5 border-2 border-primary shadow-xl">
-                  <div className="flex items-start justify-between gap-2 mb-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className="bg-primary text-white font-display text-xs px-2.5 py-0.5 rounded-full font-bold">
-                        🗑️ {selectedBin.code}
-                      </span>
-                      <span className="text-[11px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-primary">
-                        {selectedBin.status}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedBin(null)}
-                      className="text-slate-400 hover:text-slate-700 text-xs font-bold px-1.5"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <p className="font-display text-sm font-bold text-on-surface">
-                    {selectedBin.locationName}
-                  </p>
-                  <p className="text-xs text-secondary mt-0.5">
-                    Source: {selectedBin.source.toUpperCase()}{' '}
-                    {selectedBin.osmId ? `(${selectedBin.osmId})` : ''} • Confirmations:{' '}
-                    {selectedBin.yesVotes} Yes / {selectedBin.noVotes} No
-                  </p>
-                  <div className="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-on-surface-variant">
-                      Is this bin here?
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleVoteBin(selectedBin.id, 'yes')}
-                        className="bg-primary text-white text-[11px] font-bold px-2.5 py-1 rounded-lg"
-                      >
-                        ✅ Yes ({selectedBin.yesVotes})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleVoteBin(selectedBin.id, 'dog_bin')}
-                        className="bg-emerald-100 text-primary text-[11px] font-bold px-2.5 py-1 rounded-lg"
-                      >
-                        🐕 Dog Bin
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleVoteBin(selectedBin.id, 'no')}
-                        className="bg-red-50 text-error text-[11px] font-bold px-2.5 py-1 rounded-lg"
-                      >
-                        ✕ Not Here
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Floating Bottom 1-Tap Action & Emoji Bar */}
-            <div className="z-30 bg-surface-container-lowest border-t border-slate-200/90 rounded-t-3xl shadow-[0_-10px_28px_rgba(15,23,42,0.12)] px-4 pt-3 pb-20 shrink-0">
-              <div className="max-w-screen-md mx-auto">
-                {/* Instant 1-Tap Logged Toast Banner */}
-                {lastLoggedReport && (
-                  <div className="mb-2.5 p-2.5 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between text-primary">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">
-                        {SEVERITY_META[lastLoggedReport.severity].emoji}
-                      </span>
-                      <div>
-                        <p className="font-display text-xs font-extrabold text-primary">
-                          Logged #{lastLoggedReport.id.replace('rep-', '')} at{' '}
-                          {lastLoggedReport.streetName}! ({lastLoggedReport.dBinAllM}m from{' '}
-                          {lastLoggedReport.nearestBinCode})
-                        </p>
-                        <p className="text-[11px] text-primary/80">
-                          Graph G1 Intake verified • Added to Greystones Council Evidence Dossier
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleUndoLastDrop}
-                        className="text-xs font-bold underline px-2 py-1 text-slate-700 hover:text-slate-900"
-                      >
-                        Undo
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('council')}
-                        className="bg-primary text-white text-xs font-bold px-2.5 py-1 rounded-lg"
-                      >
-                        Email Council →
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Emoji Severity Selector Pills (Just Poop, Stepped In, Buggy Wheels, Wheelchair) */}
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
-                    {(Object.keys(SEVERITY_META) as SeverityType[]).map((sevKey) => {
-                      const meta = SEVERITY_META[sevKey];
-                      const active = selectedSeverity === sevKey;
-                      return (
-                        <button
-                          key={sevKey}
-                          type="button"
-                          onClick={() => setSelectedSeverity(sevKey)}
-                          className={`px-3 py-1.5 rounded-full text-xs font-display font-bold flex items-center gap-1.5 shrink-0 transition-all active:scale-95 ${
-                            active
-                              ? 'bg-primary text-on-primary shadow-sm ring-2 ring-primary/30'
-                              : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container border border-slate-200'
-                          }`}
-                        >
-                          <span className="text-sm">{meta.emoji}</span>
-                          <span>{meta.shortLabel}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-display font-bold text-primary bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 shrink-0">
-                    📏 {draftContext.dBinAllM}m from {draftContext.nearestAll.code}
+              {/* Anonymous Submitter Verification Card */}
+              <div className="p-3 rounded-xl bg-canvas border border-line space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-muted uppercase tracking-wider">
+                    Anonymous Submitter ID
+                  </span>
+                  <span className="text-[10px] font-bold text-primary bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    No Login / No PII
                   </span>
                 </div>
-
-                {/* Primary Action Row: Massive 1-Tap Drop Poop Pin + Bombard Council Button */}
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      commitFoulingReport(
-                        draftCoords.lat,
-                        draftCoords.lng,
-                        selectedSeverity
-                      )
-                    }
-                    className="flex-[1.4] h-12 sm:h-13 bg-primary hover:bg-primary-container text-on-primary px-4 rounded-xl shadow-lg shadow-primary/25 flex items-center justify-center gap-2 font-display text-sm sm:text-base font-extrabold active:scale-[0.98] transition-all"
-                  >
-                    <span className="text-xl">{SEVERITY_META[selectedSeverity].emoji}</span>
-                    <span>
-                      DROP {SEVERITY_META[selectedSeverity].shortLabel.toUpperCase()} PIN (1-TAP)
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('council')}
-                    className="flex-1 bg-[#d97706] hover:bg-[#b45309] text-white h-12 sm:h-13 px-3.5 rounded-xl shadow-lg shadow-amber-600/25 flex items-center justify-between gap-1 font-display font-bold active:scale-[0.98] transition-all"
-                  >
-                    <div className="flex items-center gap-1.5 text-left">
-                      <span className="material-symbols-outlined text-[20px]">campaign</span>
-                      <div className="leading-tight">
-                        <span className="block text-xs font-extrabold uppercase tracking-tight">
-                          Email Council
-                        </span>
-                        <span className="block text-[10px] opacity-95 font-medium">
-                          Send Evidence (6 Reps)
-                        </span>
-                      </div>
-                    </div>
-                    <span className="bg-white text-[#d97706] font-extrabold text-[10px] px-1.5 py-0.5 rounded-full shrink-0 hidden sm:inline">
-                      READY
-                    </span>
-                  </button>
-                </div>
+                <p className="font-mono text-xs font-bold text-ink">{submitterToken}</p>
+                <p className="text-[11px] text-muted leading-snug">
+                  Cryptographic checksum proves to the council that reports come from distinct real devices without collecting your name or email.
+                </p>
               </div>
+
+              {/* Background Pages Navigation */}
+              <nav className="space-y-1.5">
+                <button
+                  type="button"
+                  onClick={() => openHamburgerDestination('bins_stats')}
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-primary mt-0.5">
+                    delete_outline
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">
+                      Public Bins & Spatial Audit
+                    </p>
+                    <p className="text-xs text-muted">
+                      16 OSM litter bins, background distance engine & map overlay toggle
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openHamburgerDestination('legal_bylaws')}
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-primary mt-0.5">gavel</span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">
+                      Irish Law, €250 Fine & Bye-Laws
+                    </p>
+                    <p className="text-xs text-muted">
+                      Verified Litter Pollution Act 1997 s.22 & Wicklow Litter Plan 2026–2029
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openHamburgerDestination('watchdog')}
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-primary mt-0.5">
+                    record_voice_over
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">
+                      Council Minutes & Policy Watchdog
+                    </p>
+                    <p className="text-xs text-muted">
+                      Greystones MD councillor motions & executive responses
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openHamburgerDestination('data_admin')}
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-primary mt-0.5">
+                    database
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">
+                      Demo Seed Data vs. Prod Clean Slate
+                    </p>
+                    <p className="text-xs text-muted">
+                      Clear pre-seeded demo pins for production or export GeoJSON/CSV
+                    </p>
+                  </div>
+                </button>
+              </nav>
+            </div>
+
+            <div className="pt-4 border-t border-line text-xs text-muted flex items-center justify-between">
+              <span>Wicklow Litter Line: 1800 365 123</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setHamburgerPage('none');
+                  setHamburgerOpen(false);
+                }}
+                className="font-semibold text-primary underline"
+              >
+                Back to Map
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ==================== TAB 2: DETAILED REPORT + GRAPH G1 INTAKE TRACE ==================== */}
-      {activeTab === 'report' && (
+      {/* ==================== SECONDARY HAMBURGER PAGES ==================== */}
+      {hamburgerPage !== 'none' && (
         <main className="flex-1 overflow-y-auto max-w-screen-md w-full mx-auto px-4 pt-4 pb-28 space-y-5">
-          <section className="bg-surface-container-lowest border border-outline-variant/40 rounded-2xl shadow-sm overflow-hidden">
-            <div className="pt-3 pb-2.5 px-5 flex items-center justify-between border-b border-surface-container bg-surface-container-low/50">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary text-xl">
-                  add_location_alt
-                </span>
-                <span className="font-display text-xs uppercase tracking-wider text-primary font-extrabold">
-                  Live Pin Drop Audit (Graph G1 Intake)
-                </span>
-              </div>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs bg-error-container text-on-error-container font-bold">
-                🚨 Active Hazard
-              </span>
-            </div>
+          <div className="flex items-center justify-between pb-2 border-b border-line">
+            <button
+              type="button"
+              onClick={() => setHamburgerPage('none')}
+              className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
+            >
+              <span className="material-symbols-outlined text-base">arrow_back</span>
+              <span>Back to Map</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setHamburgerOpen(true)}
+              className="text-xs font-semibold text-muted hover:text-ink"
+            >
+              More Info Pages ☰
+            </button>
+          </div>
 
-            <div className="p-5 space-y-5">
-              {/* Detected GPS & Nearest Bin Banner */}
-              <div>
-                <h2 className="font-display text-xl font-bold text-on-surface">
-                  Report Dog Fouling at Selected Pin
-                </h2>
-                <div className="mt-2.5 flex items-start justify-between gap-2 bg-surface-container-low p-3.5 rounded-xl border border-secondary-fixed">
-                  <div className="flex items-start gap-2.5">
-                    <span className="material-symbols-outlined text-primary mt-0.5 text-lg">
-                      near_me
-                    </span>
-                    <div>
-                      <p className="text-xs font-bold text-on-surface-variant uppercase">
-                        Detected Greystones Location (Node N5 Snapped)
-                      </p>
-                      <p className="text-sm font-bold text-on-surface mt-0.5">
-                        {draftContext.streetName}
-                      </p>
-                      <p className="text-xs text-outline mt-0.5">
-                        Coordinates: {draftCoords.lat.toFixed(4)}° N,{' '}
-                        {Math.abs(draftCoords.lng).toFixed(4)}° W • H3 Cell: {draftContext.h3Cell}
-                      </p>
-                    </div>
+          {/* PAGE A: PUBLIC BINS & SPATIAL AUDIT */}
+          {hamburgerPage === 'bins_stats' && (
+            <div className="space-y-4">
+              <div className="bg-white border border-line rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <h2 className="font-display text-lg font-bold text-ink">
+                      Public Bin Layer & Background Proximity Engine
+                    </h2>
+                    <p className="text-xs text-muted">
+                      Bins run silently in the background on every report so the map stays clean, while automatically calculating exact distance to the nearest bin.
+                    </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('map')}
-                    className="text-xs font-display font-bold text-primary underline shrink-0"
+                    onClick={() => setShowBinOverlayOnMap((v) => !v)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
+                      showBinOverlayOnMap
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-canvas text-ink border-line'
+                    }`}
                   >
-                    Adjust on Map
+                    {showBinOverlayOnMap ? '🗑️ Map Bin Icons: Shown' : '🗑️ Show Bin Icons on Map'}
                   </button>
                 </div>
-              </div>
 
-              {/* Bin Proximity Callout Banner (Node N6) */}
-              <div className="bg-emerald-50/90 border-l-4 border-primary p-3.5 rounded-r-xl shadow-xs">
-                <div className="flex items-start gap-2.5">
-                  <span className="text-xl leading-none">🗑️</span>
-                  <div>
-                    <p className="font-display text-sm text-primary font-extrabold">
-                      {draftContext.dBinAllM} metres from Public Council{' '}
-                      {draftContext.nearestAll.code} ({draftContext.nearestAll.locationName})!
-                    </p>
-                    <p className="text-xs text-on-surface-variant mt-0.5 font-medium">
-                      {draftContext.dBinAllM <= 50
-                        ? 'Council cannot claim lack of disposal facilities here — bin is right beside this incident.'
-                        : 'Over 50m from the nearest mapped bin. Logged in the Bins-vs-Fouling distance distribution.'}
-                    </p>
-                  </div>
+                <div className="p-3 rounded-xl bg-canvas border border-line text-xs text-muted space-y-1">
+                  <p className="font-semibold text-ink">
+                    OpenStreetMap Snapshot (`osm_bins_2026-10-16.geojson`):
+                  </p>
+                  <p>
+                    16 `amenity=waste_basket` public litter bins are clustered along South Beach Promenade, Church Road, and the Harbour. Recycling bring-banks are excluded from distance calculations.
+                  </p>
                 </div>
-              </div>
 
-              {/* 4-Card Severity Emoji Selector */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="font-display text-sm text-on-surface font-bold">
-                    Impact Severity Level (Select Emoji Pin)
-                  </label>
-                  <span className="text-xs text-error font-semibold">Tap to select impact</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {(Object.keys(SEVERITY_META) as SeverityType[]).map((sevKey) => {
-                    const meta = SEVERITY_META[sevKey];
-                    const isSelected = selectedSeverity === sevKey;
-                    return (
-                      <button
-                        key={sevKey}
-                        type="button"
-                        onClick={() => setSelectedSeverity(sevKey)}
-                        className={`relative flex flex-col text-left p-3.5 rounded-xl transition-all active:scale-95 ${
-                          isSelected
-                            ? 'border-2 border-primary bg-primary/10 ring-2 ring-primary/25 shadow-sm'
-                            : 'border border-outline-variant/60 bg-surface-container-lowest hover:bg-surface-container-low'
-                        }`}
+                <div className="max-h-96 overflow-y-auto divide-y divide-line border border-line rounded-xl">
+                  {bins
+                    .filter((b) => b.kind !== 'recycling')
+                    .map((bin) => (
+                      <div
+                        key={bin.id}
+                        className="p-3 flex items-center justify-between gap-2 bg-white"
                       >
-                        {isSelected && (
-                          <div className="absolute top-2.5 right-2.5 flex items-center justify-center w-5 h-5 bg-primary text-on-primary rounded-full">
-                            <span className="material-symbols-outlined text-xs font-bold">
-                              check
-                            </span>
-                          </div>
-                        )}
-                        <span className="text-2xl mb-1">{meta.emoji}</span>
-                        <span className="font-display text-sm font-bold text-on-surface">
-                          {meta.shortLabel}
+                        <div>
+                          <p className="text-xs font-semibold text-ink">
+                            {bin.code} — {bin.locationName}
+                          </p>
+                          <p className="text-[11px] text-muted">
+                            {bin.lat.toFixed(4)}° N, {Math.abs(bin.lng).toFixed(4)}° W •{' '}
+                            {bin.osmId}
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-canvas border border-line text-muted uppercase">
+                          {bin.status}
                         </span>
-                        <span className="text-xs text-on-surface-variant mt-0.5">
-                          {meta.subtext}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Resident Note & GDPR / Anti-Shaming Guardrails (Node N13) */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label
-                    htmlFor="incident-note"
-                    className="font-display text-sm text-on-surface font-bold"
-                  >
-                    Observation Note (Optional, max 140 chars)
-                  </label>
-                  <span className="text-xs text-outline">{draftNote.length}/140</span>
-                </div>
-                <textarea
-                  id="incident-note"
-                  rows={2}
-                  maxLength={140}
-                  value={draftNote}
-                  onChange={(e) => setDraftNote(e.target.value)}
-                  placeholder="e.g., Buggy wheel rolled right through mess 5m from Bin #G-14 on South Beach Prom..."
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-                <div className="flex items-center gap-3">
-                  <label
-                    htmlFor="reporter-initials"
-                    className="text-xs font-semibold text-on-surface-variant"
-                  >
-                    Your Initials (anonymous badge):
-                  </label>
-                  <input
-                    id="reporter-initials"
-                    type="text"
-                    maxLength={4}
-                    value={draftReporterInitials}
-                    onChange={(e) => setDraftReporterInitials(e.target.value.toUpperCase())}
-                    className="w-20 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-bold text-on-surface"
-                  />
-                  <span className="text-[11px] text-outline">
-                    GDPR Guardrail: No owner names, house numbers, or reg plates.
-                  </span>
-                </div>
-
-                {noteWarnings.length > 0 && (
-                  <div className="p-3 bg-error-container text-on-error-container rounded-xl text-xs font-semibold space-y-1">
-                    {noteWarnings.map((w, idx) => (
-                      <p key={idx}>⚠️ {w}</p>
+                      </div>
                     ))}
-                  </div>
-                )}
+                </div>
               </div>
-
-              {/* Submit Incident CTA */}
-              <button
-                type="button"
-                onClick={() => {
-                  commitFoulingReport(
-                    draftCoords.lat,
-                    draftCoords.lng,
-                    selectedSeverity,
-                    draftNote
-                  );
-                }}
-                className="w-full py-3.5 px-4 bg-primary hover:bg-primary-container text-on-primary font-display text-sm rounded-xl font-extrabold shadow-md active:scale-95 transition-all flex items-center justify-center gap-2"
-              >
-                <span className="material-symbols-outlined text-lg">check_circle</span>
-                <span>Submit Incident & Add to Greystones Municipal Dossier</span>
-              </button>
             </div>
-          </section>
+          )}
 
-          {/* Graph Run Audit Inspector (GRAPH_DESIGN.md verification) */}
-          {lastGraphRun && (
-            <section className="bg-surface-container-lowest border border-primary/30 rounded-2xl p-4 shadow-sm space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="font-display text-xs font-extrabold uppercase tracking-wider text-primary">
-                  Graph G1 Intake Execution Checkpoint ({lastGraphRun.runId})
-                </span>
-                <span className="text-[11px] font-bold bg-emerald-100 text-primary px-2 py-0.5 rounded-full">
-                  COMMITTED: {lastGraphRun.n7Commit.status.toUpperCase()}
-                </span>
+          {/* PAGE B: LEGAL INFO & BYE-LAWS */}
+          {hamburgerPage === 'legal_bylaws' && (
+            <div className="space-y-4">
+              <div className="bg-white border border-line rounded-2xl p-4 space-y-3">
+                <h2 className="font-display text-lg font-bold text-ink">
+                  Irish Dog Fouling Law & Wicklow Policy Citations
+                </h2>
+                <p className="text-xs text-muted">
+                  Every citation below has been verified against the Irish Statute Book, gov.ie, and Wicklow County Council's Litter Management Plan 2026–2029.
+                </p>
+
+                <div className="space-y-3">
+                  {VERIFIED_CITATIONS.filter((c) => c.status === 'verified').map((cit) => (
+                    <article
+                      key={cit.id}
+                      className="p-3.5 rounded-xl bg-canvas border border-line space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-primary">{cit.code}</span>
+                        <span className="text-[10px] font-semibold bg-white border border-line px-2 py-0.5 rounded-full text-muted">
+                          Verified {cit.verifiedAt}
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-semibold text-ink">{cit.title}</h3>
+                      <p className="text-xs text-muted italic leading-relaxed">“{cit.quote}”</p>
+                      <a
+                        href={cit.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-block text-xs font-semibold text-primary hover:underline pt-1"
+                      >
+                        Read Official Source →
+                      </a>
+                    </article>
+                  ))}
+                </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                <div className="p-2.5 rounded-lg bg-surface-container-low">
-                  <strong className="block text-on-surface">N1 Validate & Rate Limit:</strong>
-                  <span className="text-on-surface-variant">{lastGraphRun.n1Validate.reason}</span>
-                </div>
-                <div className="p-2.5 rounded-lg bg-surface-container-low">
-                  <strong className="block text-on-surface">N5 PostGIS / OSM Snap:</strong>
-                  <span className="text-on-surface-variant">{lastGraphRun.n5Snap.street}</span>
-                </div>
-                <div className="p-2.5 rounded-lg bg-surface-container-low sm:col-span-2">
-                  <strong className="block text-on-surface">
-                    N6 Nearest-Bin KNN Distance & Self-Prompting Edge:
-                  </strong>
-                  <span className="text-on-surface-variant">
-                    {lastGraphRun.n6BinDist.distanceM}m to {lastGraphRun.n6BinDist.nearestBinCode} •{' '}
-                    {lastGraphRun.n6BinDist.isNearBinMythbuster
-                      ? 'Flagged as "Near Bin Still Fouled (<25m)" myth-buster evidence!'
-                      : 'Logged in distance distribution'}
-                  </span>
+            </div>
+          )}
+
+          {/* PAGE C: COUNCIL MINUTES & WATCHDOG */}
+          {hamburgerPage === 'watchdog' && (
+            <div className="space-y-4">
+              <div className="bg-white border border-line rounded-2xl p-4 space-y-3">
+                <h2 className="font-display text-lg font-bold text-ink">
+                  Greystones MD Councillor Activity & Policy Watchdog
+                </h2>
+                <p className="text-xs text-muted">
+                  Public record of motions, enforcement stats, and council commitments.
+                </p>
+                <div className="space-y-3">
+                  {HANSARD_RECORDS.map((rec) => (
+                    <article
+                      key={rec.id}
+                      className="p-3.5 rounded-xl bg-canvas border border-line space-y-2"
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-ink">
+                          {rec.body} · {rec.date}
+                        </span>
+                        <span className="font-semibold text-primary">
+                          {rec.statusEmoji} {rec.statusLabel}
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-bold text-ink">{rec.title}</h3>
+                      <p className="text-xs text-muted">{rec.summary}</p>
+                      <blockquote className="p-2.5 rounded-lg bg-white border-l-4 border-primary text-xs text-ink italic">
+                        “{rec.quoteText}”
+                      </blockquote>
+                    </article>
+                  ))}
                 </div>
               </div>
-            </section>
+            </div>
+          )}
+
+          {/* PAGE D: DEMO SEED DATA VS PROD CLEAN SLATE */}
+          {hamburgerPage === 'data_admin' && (
+            <div className="space-y-4">
+              <div className="bg-white border border-line rounded-2xl p-4 space-y-4">
+                <div>
+                  <h2 className="font-display text-lg font-bold text-ink">
+                    Demo Pre-Seeded Data & Production Clean Slate
+                  </h2>
+                  <p className="text-xs text-muted mt-1">
+                    The app ships with 15 realistic Greystones reports pre-seeded so you can demonstrate hotspots and bin-proximity insights immediately. As you move to production, clear the demo seeds below so only live resident drops are counted.
+                  </p>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-canvas border border-line flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <p className="text-sm font-semibold text-ink">
+                      Current Dataset: {reports.length} Total Reports
+                    </p>
+                    <p className="text-xs text-muted">
+                      {reports.filter((r) => r.isSeededDemo).length} pre-seeded demo pins •{' '}
+                      {reports.filter((r) => !r.isSeededDemo).length} logged on this device
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {hasDemoSeeds ? (
+                      <button
+                        type="button"
+                        onClick={handleClearSeededDemoData}
+                        className="px-3.5 py-2 rounded-xl bg-error text-white text-xs font-semibold shadow-xs hover:opacity-95"
+                      >
+                        Clear Demo Seeds for Production
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleRestoreSeededDemoData}
+                        className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-xs hover:opacity-95"
+                      >
+                        Restore 15 Demo Seeds
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
         </main>
       )}
 
-      {/* ==================== TAB 3: BINS AUDIT & HOTSPOT INTELLIGENCE (PRD §5 & §6) ==================== */}
-      {activeTab === 'bins' && (
-        <main className="flex-1 overflow-y-auto max-w-screen-md w-full mx-auto px-4 pt-4 pb-28 space-y-5">
-          {/* Executive Summary KPIs (3-Card Bento Grid from Stitch civic_metrics_hotspot_intelligence) */}
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {/* Card 1: Total Fouling */}
-            <article className="bg-surface-container-lowest border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-display text-[11px] text-secondary uppercase font-bold tracking-wider">
-                    Reported Volume
-                  </span>
-                  <span className="inline-flex items-center gap-0.5 text-xs font-bold text-error bg-red-50 px-2 py-0.5 rounded-full">
-                    Active Tally
-                  </span>
+      {/* ==================== MAIN 3-TAB MOBILE WORKFLOW ==================== */}
+      {hamburgerPage === 'none' && (
+        <>
+          {/* TAB 1: MAP IS THE HERO (Quick 1-Tap to Mark + Optional Extra Detail Step) */}
+          {activeTab === 'map' && (
+            <div className="flex-1 flex flex-col overflow-hidden relative">
+              {/* Clean Slim Filter Bar */}
+              <section className="bg-white/95 backdrop-blur-sm px-3 py-1.5 z-20 border-b border-line flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setMapFilter('all')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                      mapFilter === 'all'
+                        ? 'bg-ink text-white'
+                        : 'bg-canvas text-muted border border-line'
+                    }`}
+                  >
+                    All ({analysis.totalActiveReports})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMapFilter('near_bins')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                      mapFilter === 'near_bins'
+                        ? 'bg-primary text-white'
+                        : 'bg-canvas text-muted border border-line'
+                    }`}
+                  >
+                    ≤25m from Bin ({analysis.nearBin15mCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMapFilter('wheels')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                      mapFilter === 'wheels'
+                        ? 'bg-error text-white'
+                        : 'bg-canvas text-muted border border-line'
+                    }`}
+                  >
+                    ♿ 👶 Wheels (
+                    {analysis.bySeverity.buggy_wheels.count +
+                      analysis.bySeverity.wheelchair_wheels.count}
+                    )
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMapFilter('stepped_in')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                      mapFilter === 'stepped_in'
+                        ? 'bg-error text-white'
+                        : 'bg-canvas text-muted border border-line'
+                    }`}
+                  >
+                    👟 Stepped In ({analysis.bySeverity.stepped_in.count})
+                  </button>
                 </div>
-                <h2 className="font-display text-3xl text-on-surface font-extrabold tracking-tight">
-                  {analysis.totalActiveReports}
-                </h2>
-                <p className="font-display text-sm text-on-surface font-bold">
-                  Mapped Greystones Poos
-                </p>
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-secondary">
-                <span>16 OSM Waste Bins</span>
-                <span className="text-primary font-semibold">Greystones MD</span>
-              </div>
-            </article>
+              </section>
 
-            {/* Card 2: Proximity to Council Bins (Council Myth-Buster) */}
-            <article className="bg-surface-container-lowest border-2 border-primary/30 rounded-2xl p-4 shadow-sm flex flex-col justify-between bg-gradient-to-br from-white to-emerald-50/50">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-display text-[11px] text-primary font-extrabold uppercase tracking-wider">
-                    Council Myth-Buster
-                  </span>
-                  <span className="font-display text-[10px] bg-primary text-white px-2 py-0.5 rounded-full font-bold">
-                    Critical Stat
-                  </span>
+              {/* Map Viewport */}
+              <div className="relative flex-1 flex flex-col overflow-hidden">
+                <GreystonesMapView
+                  reports={reports}
+                  bins={bins}
+                  activeFilter={mapFilter}
+                  showBinOverlay={showBinOverlayOnMap}
+                  selectedReport={selectedReport}
+                  onSelectReport={setSelectedReport}
+                  draftCoords={draftCoords}
+                  onMapClickDropPin={handleMapClickDropPin}
+                  quickSeverity={selectedSeverity}
+                />
+
+                {/* Compact Non-Obscuring Single-Line Pill when an Existing Pin is Tapped */}
+                {selectedReport && !lastLoggedReport && (
+                  <div className="absolute bottom-36 left-3 right-3 max-w-md mx-auto z-30 pointer-events-auto">
+                    <div className="bg-white/95 backdrop-blur-md border border-line rounded-2xl px-3.5 py-2.5 shadow-lg flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xl shrink-0">
+                          {SEVERITY_META[selectedReport.severity].emoji}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-ink truncate">
+                            {selectedReport.streetName}
+                          </p>
+                          <p className="text-[11px] text-muted truncate">
+                            <strong>{selectedReport.dBinAllM}m</strong> from{' '}
+                            {selectedReport.nearestBinCode} • ID {selectedReport.submitterToken.slice(-4)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmExistingReport(selectedReport.id)}
+                          className="px-2.5 py-1 rounded-lg bg-canvas hover:bg-surface-container border border-line text-xs font-semibold text-ink"
+                        >
+                          👍 +1 ({selectedReport.confirmations})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedReport(null)}
+                          className="p-1 text-muted hover:text-ink text-xs"
+                          aria-label="Dismiss pin summary"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Post-Tap Confirmation & Optional Extra Step ("+ Add details / photo") */}
+                {lastLoggedReport && (
+                  <div className="absolute bottom-36 left-3 right-3 max-w-md mx-auto z-30 pointer-events-auto">
+                    <div className="bg-white border-2 border-primary rounded-2xl px-3.5 py-2.5 shadow-lg flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-primary flex items-center gap-1">
+                          <span>✓ On Record ({lastLoggedReport.dBinAllM}m from bin)</span>
+                        </p>
+                        <p className="text-[11px] text-muted truncate">
+                          {lastLoggedReport.streetName}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setExpandOptionalReportModal(true)}
+                          className="px-2.5 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-semibold"
+                        >
+                          + Add details / photo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleUndoLastDrop}
+                          className="px-2 py-1.5 text-xs font-semibold text-muted hover:text-ink underline"
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Bottom Hero Control Dock: 4 Emoji Pills + 1-Tap Button */}
+                <div className="z-30 bg-white border-t border-line px-3 pt-2.5 pb-16 shrink-0">
+                  <div className="max-w-md mx-auto space-y-2">
+                    <div
+                      role="group"
+                      aria-label="Select fouling impact"
+                      className="grid grid-cols-4 gap-1.5"
+                    >
+                      {(Object.keys(SEVERITY_META) as SeverityType[]).map((sevKey) => {
+                        const meta = SEVERITY_META[sevKey];
+                        const active = selectedSeverity === sevKey;
+                        return (
+                          <button
+                            key={sevKey}
+                            type="button"
+                            onClick={() => handleSeverityChange(sevKey)}
+                            className={`py-1.5 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 border transition-all active:scale-95 ${
+                              active
+                                ? 'bg-primary text-white border-primary shadow-xs'
+                                : 'bg-canvas text-ink border-line hover:bg-surface-container'
+                            }`}
+                          >
+                            <span className="text-sm">{meta.emoji}</span>
+                            <span className="truncate">{meta.shortLabel}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        logReportImmediately(
+                          draftCoords.lat,
+                          draftCoords.lng,
+                          selectedSeverity
+                        )
+                      }
+                      className="w-full h-12 bg-primary hover:bg-primary-container text-white rounded-2xl font-display text-sm font-bold shadow-sm active:scale-[0.99] transition-all flex items-center justify-center gap-2"
+                    >
+                      <span className="text-lg">{SEVERITY_META[selectedSeverity].emoji}</span>
+                      <span>
+                        Mark {SEVERITY_META[selectedSeverity].shortLabel} Here (or Tap Map)
+                      </span>
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-baseline gap-2">
-                  <h2 className="font-display text-3xl text-primary font-extrabold tracking-tight">
+              </div>
+
+              {/* OPTIONAL EXTRA STEP MODAL: Add Photo & Note after 1-Tap Drop */}
+              {expandOptionalReportModal && lastLoggedReport && (
+                <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/40 backdrop-blur-xs p-0 sm:p-4">
+                  <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-2xl border border-line shadow-2xl p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-primary">
+                          Optional Extra Details
+                        </span>
+                        <h3 className="font-display text-base font-bold text-ink">
+                          Add Photo or Note to Pin #{lastLoggedReport.id.replace('rep-', '')}
+                        </h3>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setExpandOptionalReportModal(false)}
+                        className="w-8 h-8 rounded-lg hover:bg-canvas text-muted"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleSaveOptionalDetails} className="space-y-3.5">
+                      <div className="p-3 rounded-xl bg-canvas border border-line text-xs space-y-0.5">
+                        <p className="font-semibold text-ink">{lastLoggedReport.streetName}</p>
+                        <p className="text-muted">
+                          Auto-calculated: <strong>{lastLoggedReport.dBinAllM}m</strong> from{' '}
+                          {lastLoggedReport.nearestBinCode} • Token:{' '}
+                          <span className="font-mono">{lastLoggedReport.submitterToken}</span>
+                        </p>
+                      </div>
+
+                      {/* Photo attachment */}
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-ink">
+                          Photo Evidence (Optional — ground only, no faces or reg plates)
+                        </label>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/*"
+                          onChange={handlePhotoFileChange}
+                          className="hidden"
+                        />
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="px-3.5 py-2 rounded-xl border border-line bg-canvas hover:bg-surface-container text-xs font-semibold text-ink flex items-center gap-1.5"
+                          >
+                            <span className="material-symbols-outlined text-base text-primary">
+                              add_a_photo
+                            </span>
+                            <span>{optionalPhotoPreview ? 'Change Photo' : 'Attach Photo'}</span>
+                          </button>
+                          {optionalPhotoPreview && (
+                            <img
+                              src={optionalPhotoPreview}
+                              alt="Attached fouling evidence preview"
+                              className="w-12 h-12 rounded-lg object-cover border border-line"
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Optional Note */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <label
+                            htmlFor="opt-note"
+                            className="text-xs font-semibold text-ink"
+                          >
+                            Short Note (Optional, max 140 chars)
+                          </label>
+                          <span className="text-[11px] text-muted">{optionalNote.length}/140</span>
+                        </div>
+                        <textarea
+                          id="opt-note"
+                          rows={2}
+                          maxLength={140}
+                          value={optionalNote}
+                          onChange={(e) => setOptionalNote(e.target.value)}
+                          placeholder="e.g., Right on the buggy ramp beside the bin..."
+                          className="w-full rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                        />
+                      </div>
+
+                      {noteWarnings.length > 0 && (
+                        <div className="p-2.5 rounded-xl bg-error-container text-on-error-container text-xs font-semibold">
+                          {noteWarnings.map((w, i) => (
+                            <p key={i}>⚠️ {w}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="submit"
+                          className="flex-1 py-2.5 bg-primary text-white rounded-xl text-xs font-bold"
+                        >
+                          Save Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExpandOptionalReportModal(false)}
+                          className="px-4 py-2.5 bg-canvas text-muted rounded-xl text-xs font-semibold"
+                        >
+                          Skip
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: INSIGHTS & EVIDENCE SCORECARD */}
+          {activeTab === 'insights' && (
+            <main className="flex-1 overflow-y-auto max-w-screen-md w-full mx-auto px-4 pt-4 pb-24 space-y-4">
+              {/* Clean 3-Card Bento Summary */}
+              <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <article className="bg-white border border-line rounded-2xl p-4 shadow-xs">
+                  <span className="text-[11px] font-semibold text-muted uppercase tracking-wider">
+                    Mapped Incidents
+                  </span>
+                  <h2 className="font-display text-3xl font-bold text-ink mt-1">
+                    {analysis.totalActiveReports}
+                  </h2>
+                  <p className="text-xs text-muted mt-1">
+                    Logged across <strong>{analysis.distinctSubmitters}</strong> unique anonymous tokens
+                  </p>
+                </article>
+
+                <article className="bg-white border-2 border-primary/30 rounded-2xl p-4 shadow-xs">
+                  <span className="text-[11px] font-bold text-primary uppercase tracking-wider">
+                    Beside Public Bins
+                  </span>
+                  <h2 className="font-display text-3xl font-bold text-primary mt-1">
                     {analysis.nearBin50mPct}%
                   </h2>
-                  <span className="font-display text-sm font-bold text-on-surface">
-                    ≤50m from Bin
-                  </span>
-                </div>
-                <p className="text-xs text-on-surface-variant leading-snug">
-                  <strong className="text-on-surface font-bold">
-                    {analysis.nearBin15mCount} of {analysis.totalActiveReports}
-                  </strong>{' '}
-                  incidents ({analysis.nearBin15mPct}%) occurred within{' '}
-                  <span className="underline decoration-primary font-bold">15 metres</span> of a
-                  public bin.
-                </p>
-              </div>
-              <div className="mt-3 pt-2 text-[11px] text-primary bg-primary/10 rounded-lg p-2 font-semibold flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-sm">policy</span>
-                <span>Disproves "no bins on seafront" excuse</span>
-              </div>
-            </article>
+                  <p className="text-xs text-muted mt-1">
+                    <strong>{analysis.nearBin15mCount}</strong> within 15m of a bin — disproves "long walk to bin" excuse
+                  </p>
+                </article>
 
-            {/* Card 3: High Impact Hazards (Wheels & Shoes) */}
-            <article className="bg-surface-container-lowest border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-display text-[11px] text-secondary uppercase font-bold tracking-wider">
-                    Wheel & Shoe Hits
+                <article className="bg-white border border-line rounded-2xl p-4 shadow-xs">
+                  <span className="text-[11px] font-semibold text-muted uppercase tracking-wider">
+                    Wheels & Footwear
                   </span>
-                  <span className="font-display text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full font-bold">
-                    High Hazard
-                  </span>
-                </div>
-                <h2 className="font-display text-3xl text-amber-600 font-extrabold tracking-tight">
-                  {analysis.highImpactCount}
-                </h2>
-                <p className="font-display text-sm text-on-surface font-bold">
-                  Stepped In / Buggy / Wheelchair
-                </p>
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-secondary">
-                <span>{analysis.highImpactPct}% contamination rate</span>
-                <span className="text-error font-bold">♿ 👶 👟</span>
-              </div>
-            </article>
-          </section>
+                  <h2 className="font-display text-3xl font-bold text-error mt-1">
+                    {analysis.highImpactCount}
+                  </h2>
+                  <p className="text-xs text-muted mt-1">
+                    ♿ Wheelchair, 👶 Buggy & 👟 Stepped-In hits ({analysis.highImpactPct}%)
+                  </p>
+                </article>
+              </section>
 
-          {/* Category Contamination Breakdown Bars */}
-          <section className="bg-surface-container-lowest border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3.5">
-            <div>
-              <h3 className="font-display text-base font-bold text-on-surface">
-                Category Contamination Breakdown
-              </h3>
-              <p className="text-xs text-secondary">
-                Breakdown by emoji pin type across Greystones footpaths & promenade
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {(Object.keys(SEVERITY_META) as SeverityType[]).map((sevKey) => {
-                const meta = SEVERITY_META[sevKey];
-                const stat = analysis.bySeverity[sevKey];
-                return (
-                  <div key={sevKey} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs font-display">
-                      <span className="flex items-center gap-1.5 text-on-surface font-bold">
-                        <span className="text-base">{meta.emoji}</span> {meta.label}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-secondary font-medium">{stat.count} incidents</span>
-                        <span className="bg-surface-container text-on-surface px-1.5 py-0.5 rounded font-bold">
-                          {stat.pct}%
-                        </span>
+              {/* Impact Breakdown */}
+              <section className="bg-white border border-line rounded-2xl p-4 shadow-xs space-y-3">
+                <h3 className="font-display text-sm font-bold text-ink">
+                  Breakdown by Impact Type
+                </h3>
+                <div className="space-y-2.5">
+                  {(Object.keys(SEVERITY_META) as SeverityType[]).map((sevKey) => {
+                    const meta = SEVERITY_META[sevKey];
+                    const stat = analysis.bySeverity[sevKey];
+                    return (
+                      <div key={sevKey} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-ink">
+                            {meta.emoji} {meta.label}
+                          </span>
+                          <span className="text-muted font-medium">
+                            {stat.count} ({stat.pct}%)
+                          </span>
+                        </div>
+                        <div className="h-2 w-full bg-canvas rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${
+                              meta.isHighImpact ? 'bg-error' : 'bg-primary'
+                            }`}
+                            style={{ width: `${Math.max(stat.pct, 3)}%` }}
+                          />
+                        </div>
                       </div>
-                    </div>
-                    <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* Dual Hotspot Lists */}
+              <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-white border border-line rounded-2xl p-4 space-y-2.5">
+                  <span className="text-[11px] font-bold text-error uppercase tracking-wider">
+                    Hotspots Right Beside Bins (≤50m)
+                  </span>
+                  <div className="space-y-1.5">
+                    {analysis.nearBinHotspots.map((h) => (
                       <div
-                        className={`h-full rounded-full ${
-                          sevKey === 'wheelchair_wheels'
-                            ? 'bg-error'
-                            : sevKey === 'buggy_wheels'
-                            ? 'bg-orange-500'
-                            : sevKey === 'stepped_in'
-                            ? 'bg-amber-500'
-                            : 'bg-primary'
-                        }`}
-                        style={{ width: `${Math.max(stat.pct, 4)}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          {/* Dual Honest Hotspot Lists (PRD §6: Both Near-Bin and Far-From-Bin Always Shown) */}
-          <section className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {/* List A: Hotspots WITH Bins (<50m) that are STILL fouled */}
-            <div className="bg-surface-container-lowest border border-error/30 rounded-2xl p-4 shadow-sm space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="bg-error-container text-on-error-container font-display text-[11px] font-extrabold px-2.5 py-0.5 rounded-full">
-                  🔥 BIN PRESENT, STILL FOULED (≤50m)
-                </span>
-                <span className="text-xs font-bold text-error">Needs Warden Patrols</span>
-              </div>
-              <p className="text-xs text-on-surface-variant">
-                Hotspots where public bins are right beside the mess — proving the council cannot blame bin distance:
-              </p>
-              <div className="space-y-2">
-                {analysis.nearBinHotspots.map((h) => (
-                  <div
-                    key={h.areaName}
-                    className="p-2.5 rounded-xl bg-surface-container-low flex items-center justify-between"
-                  >
-                    <div>
-                      <p className="font-display text-xs font-bold text-on-surface">
-                        {h.areaName}
-                      </p>
-                      <p className="text-[11px] text-secondary">
-                        Closest report: <strong>{h.minBinDistM}m</strong> from {h.nearestBinCode}
-                      </p>
-                    </div>
-                    <span className="bg-error text-white font-display text-xs font-extrabold px-2.5 py-1 rounded-lg">
-                      {h.count} poos
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* List B: Hotspots FAR From Any Bin (>200m) */}
-            <div className="bg-surface-container-lowest border border-amber-300 rounded-2xl p-4 shadow-sm space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="bg-amber-100 text-amber-900 font-display text-[11px] font-extrabold px-2.5 py-0.5 rounded-full">
-                  📍 CANDIDATE BIN GAPS (&gt;200m)
-                </span>
-                <span className="text-xs font-bold text-amber-800">0 Dog Bins Mapped</span>
-              </div>
-              <p className="text-xs text-on-surface-variant">
-                Per OpenStreetMap Overpass audit (`osm_bins_2026-10-16.geojson`), outer routes have zero mapped dog bins:
-              </p>
-              <div className="space-y-2">
-                {analysis.farFromBinHotspots.map((h) => (
-                  <div
-                    key={h.areaName}
-                    className="p-2.5 rounded-xl bg-amber-50/70 border border-amber-200/70 flex items-center justify-between"
-                  >
-                    <div>
-                      <p className="font-display text-xs font-bold text-on-surface">
-                        {h.areaName}
-                      </p>
-                      <p className="text-[11px] text-amber-900">
-                        Nearest bin is <strong>{h.minBinDistM}m away</strong>
-                      </p>
-                    </div>
-                    <span className="bg-amber-600 text-white font-display text-xs font-extrabold px-2.5 py-1 rounded-lg">
-                      {h.count} poos
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          {/* Crowd-Sourced Bin Verification & Add Missing Bin Form (PRD §5) */}
-          <section className="bg-surface-container-lowest border border-slate-200 rounded-2xl p-4 shadow-sm space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <h3 className="font-display text-base font-bold text-on-surface">
-                  Public Bin Layer & Crowd Verification ({bins.length} Bins)
-                </h3>
-                <p className="text-xs text-secondary">
-                  Seeded from 2026-10-16 Overpass GeoJSON (16 waste_basket + 2 bring banks) + resident confirmations
-                </p>
-              </div>
-            </div>
-
-            {/* Add Missing Bin Form */}
-            <form
-              onSubmit={handleAddCrowdBin}
-              className="p-3.5 rounded-xl bg-surface-container-low border border-slate-200 space-y-2.5"
-            >
-              <p className="font-display text-xs font-bold text-primary uppercase">
-                + Spot an Unmapped Council Bin? Add it to the Map
-              </p>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  value={newBinName}
-                  onChange={(e) => setNewBinName(e.target.value)}
-                  placeholder="Bin location (e.g., Burnaby Park South Gate)"
-                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs text-on-surface"
-                />
-                <select
-                  value={newBinKind}
-                  onChange={(e) =>
-                    setNewBinKind(e.target.value as 'general' | 'dog_waste' | 'bag_dispenser')
-                  }
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-on-surface bg-white"
-                >
-                  <option value="general">🗑️ General Litter Bin</option>
-                  <option value="dog_waste">🐕 Dedicated Dog-Waste Bin</option>
-                  <option value="bag_dispenser">🛍️ Poo-Bag Dispenser</option>
-                </select>
-                <button
-                  type="submit"
-                  className="bg-primary text-white font-display text-xs font-bold px-4 py-2 rounded-lg hover:bg-primary-container shrink-0"
-                >
-                  Add Bin at Pin
-                </button>
-              </div>
-              {binAddedFeedback && (
-                <p className="text-xs font-bold text-primary">{binAddedFeedback}</p>
-              )}
-            </form>
-
-            {/* Bin Directory Table */}
-            <div className="max-h-72 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
-              {bins.map((bin) => (
-                <div
-                  key={bin.id}
-                  className="p-3 flex items-center justify-between gap-2 hover:bg-slate-50"
-                >
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-display text-xs font-bold text-on-surface">
-                        {bin.code}: {bin.locationName}
-                      </span>
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
-                          bin.status === 'verified'
-                            ? 'bg-emerald-100 text-primary'
-                            : 'bg-amber-100 text-amber-900'
-                        }`}
+                        key={h.areaName}
+                        className="p-2.5 rounded-xl bg-canvas flex items-center justify-between text-xs"
                       >
-                        {bin.status}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-secondary mt-0.5">
-                      {bin.lat.toFixed(4)}° N, {Math.abs(bin.lng).toFixed(4)}° W • Source:{' '}
-                      {bin.source.toUpperCase()} • Votes: {bin.yesVotes} yes / {bin.noVotes} no
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleVoteBin(bin.id, 'yes')}
-                      className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-primary text-xs font-bold border border-emerald-200"
-                    >
-                      Confirm ({bin.yesVotes})
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        </main>
-      )}
-
-      {/* ==================== TAB 4: BOMBARD COUNCIL EMAIL BUILDER & WATCHDOG (PRD §3.2, §4, §7) ==================== */}
-      {activeTab === 'council' && (
-        <main className="flex-1 overflow-y-auto max-w-screen-md w-full mx-auto px-4 pt-4 pb-28 space-y-6">
-          {/* Bombard Council Action Campaign Hub */}
-          <section className="bg-surface-container-lowest border-2 border-primary/25 rounded-2xl p-5 shadow-sm space-y-5">
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs bg-tertiary-fixed text-on-tertiary-fixed font-display font-bold">
-                  ⚡ Direct Civic Action Hub (30-Second Email)
-                </span>
-                <span className="font-display text-xs text-primary font-extrabold">
-                  {emailsDispatchedCount} Resident Emails Prepared
-                </span>
-              </div>
-              <h2 className="font-display text-xl sm:text-2xl font-extrabold text-on-surface">
-                Send Overwhelming Visual & Spatial Evidence to Greystones Councillors
-              </h2>
-              <p className="text-xs sm:text-sm text-on-surface-variant">
-                Auto-populates live Greystones fouling counts, exact bin-proximity stats (proving{' '}
-                <strong>{analysis.nearBin50mPct}%</strong> of poos happen within 50m of a bin), and
-                verified Irish statutory citations (`s.22 Litter Pollution Act 1997` & the `€250`
-                fixed penalty). Nothing is sent automatically — you review and press Send in your
-                own email app.
-              </p>
-            </div>
-
-            {/* 1. Template Selector */}
-            <div className="space-y-2">
-              <label className="font-display text-xs font-extrabold uppercase tracking-wider text-secondary">
-                1. Choose Evidence Template & Tone
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {EMAIL_TEMPLATES.map((tpl) => {
-                  const active = selectedTemplateId === tpl.id;
-                  return (
-                    <button
-                      key={tpl.id}
-                      type="button"
-                      onClick={() => setSelectedTemplateId(tpl.id)}
-                      className={`p-3 rounded-xl text-left border transition-all ${
-                        active
-                          ? 'border-2 border-primary bg-primary/10 shadow-xs'
-                          : 'border-slate-200 bg-surface hover:bg-surface-container-low'
-                      }`}
-                    >
-                      <p className="font-display text-xs font-extrabold text-on-surface">
-                        {tpl.label}
-                      </p>
-                      <p className="text-[11px] text-on-surface-variant mt-0.5">{tpl.shortDesc}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* 2. Target List: 6 Elected Greystones MD Councillors */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="font-display text-xs font-extrabold uppercase tracking-wider text-secondary">
-                  2. Greystones Municipal District Councillors ({selectedCouncillorIds.length} of 6
-                  Selected)
-                </label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSelectedCouncillorIds(
-                      selectedCouncillorIds.length === GREYSTONES_COUNCILLORS.length
-                        ? []
-                        : GREYSTONES_COUNCILLORS.map((c) => c.id)
-                    )
-                  }
-                  className="text-xs font-bold text-primary underline"
-                >
-                  {selectedCouncillorIds.length === GREYSTONES_COUNCILLORS.length
-                    ? 'Deselect All'
-                    : 'Select All 6'}
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {GREYSTONES_COUNCILLORS.map((cllr) => {
-                  const checked = selectedCouncillorIds.includes(cllr.id);
-                  return (
-                    <button
-                      key={cllr.id}
-                      type="button"
-                      onClick={() =>
-                        setSelectedCouncillorIds((prev) =>
-                          prev.includes(cllr.id)
-                            ? prev.filter((id) => id !== cllr.id)
-                            : [...prev, cllr.id]
-                        )
-                      }
-                      className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition-all ${
-                        checked
-                          ? 'bg-emerald-50/60 border-primary/40'
-                          : 'bg-surface border-slate-200 opacity-65'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-full bg-surface-container-high text-primary flex items-center justify-center font-display font-extrabold text-xs shrink-0">
-                          {cllr.initials}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-display text-xs font-bold text-on-surface truncate">
-                            {cllr.name}
-                          </p>
-                          <p className="text-[10px] text-outline truncate">
-                            {cllr.party} • {cllr.email}
+                        <div>
+                          <p className="font-semibold text-ink">{h.areaName}</p>
+                          <p className="text-[11px] text-muted">
+                            Closest: {h.minBinDistM}m from {h.nearestBinCode}
                           </p>
                         </div>
+                        <span className="font-bold text-ink">{h.count} reports</span>
                       </div>
-                      <span className="material-symbols-outlined text-primary text-lg shrink-0">
-                        {checked ? 'check_box' : 'check_box_outline_blank'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                    ))}
+                  </div>
+                </div>
 
-              {/* CC Statutory Council Contacts */}
-              <div className="pt-2 flex flex-wrap gap-2">
-                {COUNCIL_CC_CONTACTS.map((cc) => {
-                  const checked = selectedCcIds.includes(cc.id);
-                  return (
-                    <button
-                      key={cc.id}
-                      type="button"
-                      onClick={() =>
-                        setSelectedCcIds((prev) =>
-                          prev.includes(cc.id)
-                            ? prev.filter((id) => id !== cc.id)
-                            : [...prev, cc.id]
-                        )
-                      }
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-display font-semibold border flex items-center gap-1 ${
-                        checked
-                          ? 'bg-surface-container-high border-primary/30 text-on-surface'
-                          : 'bg-slate-50 border-slate-200 text-slate-500'
-                      }`}
-                    >
-                      <span>{checked ? '☑' : '☐'}</span>
-                      <span>CC: {cc.email}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+                <div className="bg-white border border-line rounded-2xl p-4 space-y-2.5">
+                  <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
+                    Outer Walks With No Bins (&gt;200m)
+                  </span>
+                  <div className="space-y-1.5">
+                    {analysis.farFromBinHotspots.map((h) => (
+                      <div
+                        key={h.areaName}
+                        className="p-2.5 rounded-xl bg-canvas flex items-center justify-between text-xs"
+                      >
+                        <div>
+                          <p className="font-semibold text-ink">{h.areaName}</p>
+                          <p className="text-[11px] text-muted">
+                            Nearest bin: {h.minBinDistM}m away
+                          </p>
+                        </div>
+                        <span className="font-bold text-ink">{h.count} reports</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
 
-            {/* 3. Sign-Off Name (Local Only) */}
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-              <label
-                htmlFor="resident-signoff"
-                className="font-display text-xs font-bold text-secondary shrink-0"
+              <button
+                type="button"
+                onClick={() => setActiveTab('council')}
+                className="w-full py-3.5 bg-primary text-white rounded-2xl font-display text-sm font-bold shadow-xs"
               >
-                Sign email as (local only, never stored):
-              </label>
-              <input
-                id="resident-signoff"
-                type="text"
-                value={residentSignOff}
-                onChange={(e) => setResidentSignOff(e.target.value)}
-                className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-on-surface"
-              />
-            </div>
+                Send This Evidence to Greystones Councillors →
+              </button>
+            </main>
+          )}
 
-            {/* 4. Prepared Formal Evidence Email Preview */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="font-display text-xs font-extrabold uppercase tracking-wider text-secondary">
-                  3. Prepared Formal Evidence Dossier Preview
-                </label>
-                <span className="text-[11px] text-primary font-semibold">
-                  {activeCitations.length} Verified Citations Attached (Node N9)
-                </span>
-              </div>
-              <div className="bg-surface-container-low/90 border border-outline-variant/60 rounded-xl p-3.5 space-y-2">
-                <div className="border-b border-outline-variant/40 pb-2 text-xs">
-                  <p className="text-outline font-bold">
-                    TO: <span className="text-on-surface">{generatedEmail.toEmails.join(', ')}</span>
-                  </p>
-                  <p className="text-outline font-bold mt-0.5">
-                    CC: <span className="text-on-surface">{generatedEmail.ccEmails.join(', ')}</span>
-                  </p>
-                  <p className="font-display font-bold text-error mt-1">
-                    SUBJECT: {generatedEmail.subject}
+          {/* TAB 3: EMAIL COUNCIL (30-Second Templated Action) */}
+          {activeTab === 'council' && (
+            <main className="flex-1 overflow-y-auto max-w-screen-md w-full mx-auto px-4 pt-4 pb-24 space-y-4">
+              <section className="bg-white border border-line rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
+                <div>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-primary">
+                    Greystones Municipal District ({emailsPreparedCount} emails prepared)
+                  </span>
+                  <h2 className="font-display text-xl font-bold text-ink mt-0.5">
+                    Email the 6 Local Councillors
+                  </h2>
+                  <p className="text-xs text-muted mt-1">
+                    Pre-populated with live map numbers, background bin-distance calculations, and verified Irish law. Opens in your own email app.
                   </p>
                 </div>
-                <pre className="whitespace-pre-wrap font-sans text-xs text-on-surface leading-relaxed max-h-64 overflow-y-auto">
-                  {generatedEmail.body}
-                </pre>
-              </div>
-            </div>
 
-            {/* Primary Send & Copy Buttons */}
-            <div className="space-y-2.5 pt-1">
-              <a
-                href={generatedEmail.mailtoHref}
-                onClick={() => setEmailsDispatchedCount((c) => c + 1)}
-                className="w-full py-3.5 px-4 bg-[#d97706] hover:bg-[#b45309] text-white font-display text-sm rounded-xl font-extrabold shadow-md active:scale-95 transition-all flex items-center justify-center gap-2 text-center"
-              >
-                <span className="material-symbols-outlined text-lg">mail</span>
-                <span>Open Ready-to-Send Email in Your Mail App ({generatedEmail.toEmails.length} Cllrs)</span>
-              </a>
+                {/* 1. Template Choice */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-ink">1. Select Template</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {EMAIL_TEMPLATES.map((tpl) => {
+                      const active = selectedTemplateId === tpl.id;
+                      return (
+                        <button
+                          key={tpl.id}
+                          type="button"
+                          onClick={() => setSelectedTemplateId(tpl.id)}
+                          className={`p-3 rounded-xl text-left border transition-colors ${
+                            active
+                              ? 'border-primary bg-primary/5'
+                              : 'border-line bg-white hover:bg-canvas'
+                          }`}
+                        >
+                          <p className="text-xs font-bold text-ink">{tpl.label}</p>
+                          <p className="text-[11px] text-muted mt-0.5">{tpl.shortDesc}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleCopyFullEmail}
-                  className="py-2.5 px-3 bg-surface hover:bg-surface-container border border-outline text-on-surface font-display text-xs rounded-xl font-bold active:scale-95 transition-all flex items-center justify-center gap-1.5"
-                >
-                  <span className="material-symbols-outlined text-base">content_copy</span>
-                  <span>Copy Full Email & Addresses</span>
-                </button>
-                <a
-                  href={generatedEmail.gmailHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="py-2.5 px-3 bg-surface hover:bg-surface-container border border-outline text-on-surface font-display text-xs rounded-xl font-bold active:scale-95 transition-all flex items-center justify-center gap-1.5 text-center"
-                >
-                  <span className="material-symbols-outlined text-base">open_in_new</span>
-                  <span>Compose in Gmail Web</span>
-                </a>
-              </div>
-
-              {emailCopiedToast && (
-                <p className="text-xs font-bold text-primary text-center bg-emerald-50 py-2 rounded-lg border border-emerald-200">
-                  ✅ {emailCopiedToast}
-                </p>
-              )}
-
-              <p className="text-[11px] text-secondary text-center">
-                Official Wicklow Litter Line: <strong>Freephone 1800 365 123</strong> • Waste
-                Management: <strong>0404 20127</strong>
-              </p>
-            </div>
-          </section>
-
-          {/* Council Minutes & Statutory Record Watchdog (from Stitch council_minutes_public_record_tracker) */}
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-display text-lg font-extrabold text-on-surface">
-                  Wicklow Policy & Statutory Record Watchdog
-                </h3>
-                <p className="text-xs text-secondary">
-                  Verified citations & public audit findings (Graph Node N9 — only VERIFIED sources shown)
-                </p>
-              </div>
-              <span className="text-xs font-bold text-primary bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                Verified 16 Oct 2026
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              {HANSARD_RECORDS.map((rec) => (
-                <article
-                  key={rec.id}
-                  className="bg-surface-container-lowest rounded-2xl p-4 border border-slate-200 shadow-sm space-y-2.5"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-display text-[11px] font-bold">
-                        {rec.body}
-                      </span>
-                      <span className="text-xs text-outline">{rec.date}</span>
-                    </div>
-                    <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-display text-[11px] font-bold ${
-                        rec.statusTone === 'error'
-                          ? 'bg-error-container text-on-error-container'
-                          : rec.statusTone === 'success'
-                          ? 'bg-emerald-100 text-primary'
-                          : 'bg-surface-container-high text-on-surface-variant'
-                      }`}
+                {/* 2. Councillors */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-ink">
+                      2. Greystones Councillors ({selectedCouncillorIds.length} of 6)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedCouncillorIds(
+                          selectedCouncillorIds.length === GREYSTONES_COUNCILLORS.length
+                            ? []
+                            : GREYSTONES_COUNCILLORS.map((c) => c.id)
+                        )
+                      }
+                      className="text-xs font-semibold text-primary underline"
                     >
-                      <span>{rec.statusEmoji}</span>
-                      <span>{rec.statusLabel}</span>
-                    </span>
+                      {selectedCouncillorIds.length === GREYSTONES_COUNCILLORS.length
+                        ? 'Deselect all'
+                        : 'Select all 6'}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {GREYSTONES_COUNCILLORS.map((cllr) => {
+                      const checked = selectedCouncillorIds.includes(cllr.id);
+                      return (
+                        <button
+                          key={cllr.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedCouncillorIds((prev) =>
+                              prev.includes(cllr.id)
+                                ? prev.filter((id) => id !== cllr.id)
+                                : [...prev, cllr.id]
+                            )
+                          }
+                          className={`px-3 py-2 rounded-xl border text-left flex items-center justify-between ${
+                            checked
+                              ? 'border-primary/40 bg-canvas'
+                              : 'border-line bg-white opacity-60'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-ink truncate">{cllr.name}</p>
+                            <p className="text-[11px] text-muted truncate">{cllr.email}</p>
+                          </div>
+                          <span className="text-primary text-sm font-bold">
+                            {checked ? '✓' : ''}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
 
-                  <div>
-                    <h4 className="font-display text-sm font-bold text-on-surface">{rec.title}</h4>
-                    <p className="text-xs text-secondary mt-0.5">{rec.summary}</p>
+                  {/* CC Contacts */}
+                  <div className="pt-1 flex flex-wrap gap-1.5">
+                    {COUNCIL_CC_CONTACTS.map((cc) => {
+                      const checked = selectedCcIds.includes(cc.id);
+                      return (
+                        <button
+                          key={cc.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedCcIds((prev) =>
+                              prev.includes(cc.id)
+                                ? prev.filter((id) => id !== cc.id)
+                                : [...prev, cc.id]
+                            )
+                          }
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border ${
+                            checked
+                              ? 'border-primary/40 bg-canvas text-ink'
+                              : 'border-line bg-white text-muted'
+                          }`}
+                        >
+                          {checked ? '✓ ' : '+ '}CC {cc.email}
+                        </button>
+                      );
+                    })}
                   </div>
+                </div>
 
-                  <div className="bg-surface-container-low rounded-xl p-3 border-l-4 border-primary text-xs text-on-surface">
-                    <p className="font-display text-[10px] text-primary font-extrabold uppercase mb-1">
-                      {rec.quoteHeader}
-                    </p>
-                    <p className="italic text-on-surface-variant leading-relaxed">
-                      “{rec.quoteText}”
-                    </p>
+                {/* Sign-off */}
+                <div className="space-y-1">
+                  <label htmlFor="sign-off" className="text-xs font-semibold text-ink">
+                    Sign off (local only)
+                  </label>
+                  <input
+                    id="sign-off"
+                    type="text"
+                    value={residentSignOff}
+                    onChange={(e) => setResidentSignOff(e.target.value)}
+                    className="w-full rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                  />
+                </div>
+
+                {/* Email Preview */}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-ink">Preview</label>
+                  <div className="rounded-xl border border-line bg-canvas p-3 space-y-2">
+                    <p className="text-xs font-bold text-ink">{generatedEmail.subject}</p>
+                    <pre className="whitespace-pre-wrap font-sans text-xs text-ink leading-relaxed max-h-56 overflow-y-auto">
+                      {generatedEmail.body}
+                    </pre>
                   </div>
+                </div>
 
-                  <div className="pt-1 flex items-center justify-between text-xs text-outline">
-                    <span>{rec.footerMeta}</span>
+                {/* Send Actions */}
+                <div className="space-y-2">
+                  <a
+                    href={generatedEmail.mailtoHref}
+                    onClick={() => setEmailsPreparedCount((c) => c + 1)}
+                    className="w-full h-12 bg-primary hover:bg-primary-container text-white rounded-2xl font-display text-sm font-bold flex items-center justify-center gap-2"
+                  >
+                    <span className="material-symbols-outlined text-lg">mail</span>
+                    <span>Open in Your Email App</span>
+                  </a>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyFullEmail}
+                      className="h-10 rounded-xl border border-line bg-white hover:bg-canvas text-xs font-semibold text-ink flex items-center justify-center gap-1.5"
+                    >
+                      <span className="material-symbols-outlined text-sm">content_copy</span>
+                      <span>Copy Email</span>
+                    </button>
                     <a
-                      href={rec.pdfUrl}
+                      href={generatedEmail.gmailHref}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-primary font-display font-bold hover:underline flex items-center gap-1"
+                      className="h-10 rounded-xl border border-line bg-white hover:bg-canvas text-xs font-semibold text-ink flex items-center justify-center gap-1.5"
                     >
-                      <span>Verify Official Source</span>
                       <span className="material-symbols-outlined text-sm">open_in_new</span>
+                      <span>Gmail Web</span>
                     </a>
                   </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        </main>
+                  {emailCopiedToast && (
+                    <p className="text-center text-xs font-semibold text-primary">
+                      {emailCopiedToast}
+                    </p>
+                  )}
+                </div>
+              </section>
+            </main>
+          )}
+        </>
       )}
 
-      {/* Bottom Navigation Bar (4 Destinations matching Stitch Design System) */}
+      {/* Clean 3-Item Mobile Bottom Navigation Bar */}
       <nav
-        aria-label="Main Navigation"
-        className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-3 py-1.5 bg-surface-container-lowest shadow-[0_-4px_12px_rgba(15,23,42,0.08)] border-t border-slate-200/80"
+        aria-label="Primary Bottom Navigation"
+        className="fixed bottom-0 left-0 w-full z-40 grid grid-cols-3 gap-1 px-3 py-1.5 bg-white border-t border-line shadow-xs"
       >
         <button
           type="button"
-          onClick={() => setActiveTab('map')}
-          className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 transition-all active:scale-95 ${
-            activeTab === 'map'
-              ? 'bg-primary-container text-on-primary-container font-bold shadow-xs'
-              : 'text-on-surface-variant hover:bg-surface-container'
+          onClick={() => {
+            setHamburgerPage('none');
+            setActiveTab('map');
+          }}
+          className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition-colors ${
+            hamburgerPage === 'none' && activeTab === 'map'
+              ? 'bg-primary text-white'
+              : 'text-muted hover:bg-canvas'
           }`}
         >
-          <span className="material-symbols-outlined text-[20px]">map</span>
-          <span className="font-display text-[11px] mt-0.5">Map & 1-Tap</span>
+          <span className="material-symbols-outlined text-[18px]">map</span>
+          <span>Map</span>
         </button>
 
         <button
           type="button"
-          onClick={() => setActiveTab('report')}
-          className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 transition-all active:scale-95 ${
-            activeTab === 'report'
-              ? 'bg-primary-container text-on-primary-container font-bold shadow-xs'
-              : 'text-on-surface-variant hover:bg-surface-container'
+          onClick={() => {
+            setHamburgerPage('none');
+            setActiveTab('insights');
+          }}
+          className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition-colors ${
+            hamburgerPage === 'none' && activeTab === 'insights'
+              ? 'bg-primary text-white'
+              : 'text-muted hover:bg-canvas'
           }`}
         >
-          <span className="material-symbols-outlined text-[20px]">add_location_alt</span>
-          <span className="font-display text-[11px] mt-0.5">Report</span>
+          <span className="material-symbols-outlined text-[18px]">bar_chart</span>
+          <span>Insights</span>
         </button>
 
         <button
           type="button"
-          onClick={() => setActiveTab('bins')}
-          className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 transition-all active:scale-95 ${
-            activeTab === 'bins'
-              ? 'bg-primary-container text-on-primary-container font-bold shadow-xs'
-              : 'text-on-surface-variant hover:bg-surface-container'
+          onClick={() => {
+            setHamburgerPage('none');
+            setActiveTab('council');
+          }}
+          className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition-colors ${
+            hamburgerPage === 'none' && activeTab === 'council'
+              ? 'bg-primary text-white'
+              : 'text-muted hover:bg-canvas'
           }`}
         >
-          <span className="material-symbols-outlined text-[20px]">delete_outline</span>
-          <span className="font-display text-[11px] mt-0.5">Bins & Stats</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('council')}
-          className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 transition-all active:scale-95 relative ${
-            activeTab === 'council'
-              ? 'bg-primary-container text-on-primary-container font-bold shadow-xs'
-              : 'text-on-surface-variant hover:bg-surface-container'
-          }`}
-        >
-          <span className="material-symbols-outlined text-[20px]">send</span>
-          <span className="font-display text-[11px] mt-0.5">Email Council</span>
+          <span className="material-symbols-outlined text-[18px]">mail</span>
+          <span>Email Council</span>
         </button>
       </nav>
     </div>
   );
 }
+
 export default App;

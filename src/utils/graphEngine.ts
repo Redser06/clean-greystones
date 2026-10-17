@@ -55,6 +55,62 @@ export const SEVERITY_META: Record<
   },
 };
 
+const SUBMITTER_STORAGE_KEY = 'clean-greystones.submitter-token.v1';
+
+/**
+ * Generates a deterministic, provable anonymous device token (e.g. "GS-ANON-7F3A-9C12")
+ * with a verifiable checksum nibble so the council can see how many distinct residents
+ * submitted reports without logins, accounts, or PII.
+ */
+export function generateAnonymousSubmitterToken(seedHex?: string): string {
+  const rawHex =
+    seedHex && /^[0-9A-Fa-f]{6}$/.test(seedHex)
+      ? seedHex.toUpperCase()
+      : Array.from({ length: 6 }, () =>
+          Math.floor(Math.random() * 16)
+            .toString(16)
+            .toUpperCase()
+        ).join('');
+
+  // Compute deterministic 2-hex-digit check byte over the 6 hex chars
+  let sum = 0x5a;
+  for (let i = 0; i < rawHex.length; i++) {
+    sum = (sum + rawHex.charCodeAt(i) * (i + 3)) & 0xff;
+  }
+  const checkHex = sum.toString(16).toUpperCase().padStart(2, '0');
+  return `GS-ANON-${rawHex.slice(0, 4)}-${rawHex.slice(4, 6)}${checkHex}`;
+}
+
+/**
+ * Verifies that an anonymous submitter token matches the Clean Greystones checksum algorithm.
+ */
+export function isValidSubmitterToken(token: string): boolean {
+  const match = /^GS-ANON-([0-9A-F]{4})-([0-9A-F]{2})([0-9A-F]{2})$/.exec(token);
+  if (!match) return false;
+  const seedHex = `${match[1]}${match[2]}`;
+  return generateAnonymousSubmitterToken(seedHex) === token;
+}
+
+/**
+ * Reads or persists the submitter's unique anonymous device token in localStorage.
+ */
+export function getOrCreateSubmitterToken(): string {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return generateAnonymousSubmitterToken('8F4E2B');
+  }
+  try {
+    const existing = window.localStorage.getItem(SUBMITTER_STORAGE_KEY);
+    if (existing && isValidSubmitterToken(existing)) {
+      return existing;
+    }
+    const created = generateAnonymousSubmitterToken();
+    window.localStorage.setItem(SUBMITTER_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return generateAnonymousSubmitterToken('8F4E2B');
+  }
+}
+
 /**
  * Haversine distance in metres between two WGS84 coordinates (deterministic PostGIS ST_Distance equivalent).
  */
@@ -64,7 +120,7 @@ export function haversineDistanceMeters(
   lat2: number,
   lng2: number
 ): number {
-  const R = 6371000; // Earth radius in metres
+  const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
@@ -191,7 +247,7 @@ export function inferGreystonesLocation(lat: number, lng: number): {
 }
 
 /**
- * Graph Node N6: Compute nearest bin distance across all bins and verified bins
+ * Graph Node N6: Compute nearest bin distance across litter bins (excludes recycling bring-banks)
  */
 export function findNearestBins(
   lat: number,
@@ -203,12 +259,13 @@ export function findNearestBins(
   nearestVerified: PublicBin;
   dBinVerifiedM: number;
 } {
-  const activeBins = bins.filter((b) => b.status !== 'removed');
-  const verifiedBins = activeBins.filter((b) => b.status === 'verified');
+  const activeBins = bins.filter((b) => b.status !== 'removed' && b.kind !== 'recycling');
+  const fallbackBins = activeBins.length > 0 ? activeBins : bins;
+  const verifiedBins = fallbackBins.filter((b) => b.status === 'verified');
 
-  let nearestAll = activeBins[0];
+  let nearestAll = fallbackBins[0];
   let minAll = Infinity;
-  for (const b of activeBins) {
+  for (const b of fallbackBins) {
     const d = haversineDistanceMeters(lat, lng, b.lat, b.lng);
     if (d < minAll) {
       minAll = d;
@@ -236,6 +293,7 @@ export function findNearestBins(
 
 export interface BinsAnalysisSummary {
   totalActiveReports: number;
+  distinctSubmitters: number;
   nearBin15mCount: number;
   nearBin15mPct: number;
   nearBin50mCount: number;
@@ -256,14 +314,15 @@ export interface BinsAnalysisSummary {
 
 /**
  * Graph Node N10: Bins vs Fouling Analysis Engine
- * Evaluates both "Fouling right beside bins" (Council Myth-Buster) AND "Far from any bin (>200m)" hotspots
- * so the data cannot be cherry-picked.
+ * Runs silently in the background on every pin drop and powers the Stats drawer & Councillor Email Builder.
  */
 export function computeBinsVsFoulingAnalysis(
   reports: FoulingReport[]
 ): BinsAnalysisSummary {
-  const active = reports.filter((r) => r.status === 'spotted' || r.status === 'cleared');
+  const active = reports.filter((r) => r.status === 'spotted');
   const total = Math.max(active.length, 1);
+
+  const distinctTokens = new Set(active.map((r) => r.submitterToken)).size;
 
   const near15 = active.filter((r) => r.dBinAllM <= 15).length;
   const near50 = active.filter((r) => r.dBinAllM <= 50).length;
@@ -284,10 +343,9 @@ export function computeBinsVsFoulingAnalysis(
     bySeverity[r.severity].count += 1;
   }
   (Object.keys(bySeverity) as SeverityType[]).forEach((k) => {
-    bySeverity[k].pct = Math.round((bySeverity[k].count / total) * 100);
+    bySeverity[k].pct = active.length === 0 ? 0 : Math.round((bySeverity[k].count / total) * 100);
   });
 
-  // Group by areaName for hotspots
   const byArea = new Map<
     string,
     { count: number; totalDist: number; minDist: number; nearestBinCode: string }
@@ -341,33 +399,38 @@ export function computeBinsVsFoulingAnalysis(
   nearBinHotspots.sort((a, b) => b.count - a.count);
   farFromBinHotspots.sort((a, b) => b.count - a.count);
 
-  const near50Pct = Math.round((near50 / total) * 100);
-  const gt200Pct = Math.round((gt200 / total) * 100);
+  const near50Pct = active.length === 0 ? 0 : Math.round((near50 / total) * 100);
+  const gt200Pct = active.length === 0 ? 0 : Math.round((gt200 / total) * 100);
 
   let verdict: 'not_bins' | 'bins_gap' | 'inconclusive' = 'not_bins';
   let verdictHeadline = `${near50Pct}% of Fouling Occurs Within 50m of a Public Bin`;
   let verdictExplanation =
     'Bins sit right beside the main coastal and town-centre hotspots, proving that coastal fouling is driven by unpunished behaviour and lack of warden patrols — while outer estates (Kindlestown, Charlesland, Cliff Walk) have zero mapped dog bins.';
 
-  if (gt200Pct > 55) {
+  if (active.length === 0) {
+    verdict = 'inconclusive';
+    verdictHeadline = 'No Active Pins Logged Yet (Production Clean Slate)';
+    verdictExplanation = 'Tap anywhere on the Greystones map to log the first incident.';
+  } else if (gt200Pct > 55) {
     verdict = 'bins_gap';
     verdictHeadline = `${gt200Pct}% of Reports Are >200m From Any Public Bin`;
     verdictExplanation =
-      'Outer walking routes show significant bin gaps (>200m from any verified bin), alongside heavy repeat fouling right beside existing seafront bins.';
+      'Outer walking routes show significant bin gaps (>200m from any verified bin), alongside repeat fouling right beside existing seafront bins.';
   }
 
   return {
     totalActiveReports: active.length,
+    distinctSubmitters: distinctTokens,
     nearBin15mCount: near15,
-    nearBin15mPct: Math.round((near15 / total) * 100),
+    nearBin15mPct: active.length === 0 ? 0 : Math.round((near15 / total) * 100),
     nearBin50mCount: near50,
     nearBin50mPct: near50Pct,
-    le100mPct: Math.round((le100 / total) * 100),
-    le200mPct: Math.round((le200 / total) * 100),
+    le100mPct: active.length === 0 ? 0 : Math.round((le100 / total) * 100),
+    le200mPct: active.length === 0 ? 0 : Math.round((le200 / total) * 100),
     gt200mCount: gt200,
     gt200mPct: gt200Pct,
     highImpactCount: highImpact,
-    highImpactPct: Math.round((highImpact / total) * 100),
+    highImpactPct: active.length === 0 ? 0 : Math.round((highImpact / total) * 100),
     bySeverity,
     verdict,
     verdictHeadline,
@@ -405,13 +468,11 @@ export function checkPiiAndGuardrails(text: string): {
   warnings: string[];
 } {
   const warnings: string[] = [];
-  // Detect Irish car registration plate pattern (e.g. 241-WW-1234 or 192-D-4521)
   if (/\b\d{2,3}\s*-\s*[A-Za-z]{1,2}\s*-\s*\d{1,6}\b/.test(text)) {
     warnings.push(
       'Vehicle registration plates are prohibited under our GDPR & anti-shaming rules. Please remove the plate number.'
     );
   }
-  // Detect house number accusation pattern (e.g. "number 14", "No. 22", "lives at 8")
   if (/\b(house\s*(no|number)?\s*\d+|lives\s+at\s+\d+|owner\s+at\s+\d+)\b/i.test(text)) {
     warnings.push(
       'Identifying private residences or naming individual dog owners is blocked. Focus on public footpath locations and council enforcement.'
