@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Baby, Accessibility, Camera, Footprints, MapPin, Route } from 'lucide-react';
+import { town } from '../config/town';
 import type { Impact, Report } from '../types';
-import { GREYSTONES_CENTRE } from '../lib/geo';
 import { createReport, moveReport, withImpact, withPhoto } from '../lib/reportFlow';
 import { MapView, type MapPoint } from './MapView';
 
@@ -62,7 +62,7 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
     if (busy) return;
     setBusy(true);
     const located = await currentLocation();
-    const point = located ?? GREYSTONES_CENTRE;
+    const point = located ?? town.map.centre;
     const report = createReport({
       lat: point.lat,
       lng: point.lng,
@@ -102,10 +102,14 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
 
   return (
     <div className="relative h-full">
-      <h2 className="sr-only">Report dog fouling</h2>
+      <h2 className="sr-only">{town.branding.tagline}</h2>
       <MapView
         points={points}
-        zoom={15}
+        zoom={town.map.reportZoom}
+        centre={town.map.centre}
+        bounds={town.map.bounds}
+        colour={town.branding.primaryColour}
+        label={`Map of ${town.name}`}
         focus={focus}
         attributionInset={176}
         onMovePoint={(id, lat, lng) => update(id, (report) => moveReport(report, lat, lng))}

@@ -46,11 +46,11 @@ describe('monthly report stat', () => {
   });
 
   it('uses Irish civil time for the month boundary', () => {
-    const stillSeptember = monthlyReportStat([{ createdAt: '2026-09-30T21:30:00Z' }], now);
+    const stillSeptember = monthlyReportStat([{ createdAt: '2026-09-30T21:30:00Z' }], now, 'Europe/Dublin');
     assert.equal(stillSeptember.lastMonth, 1);
     assert.equal(stillSeptember.thisMonth, 0);
 
-    const alreadyOctober = monthlyReportStat([{ createdAt: '2026-09-30T23:30:00Z' }], now);
+    const alreadyOctober = monthlyReportStat([{ createdAt: '2026-09-30T23:30:00Z' }], now, 'Europe/Dublin');
     assert.equal(alreadyOctober.thisMonth, 1);
     assert.equal(alreadyOctober.lastMonth, 0);
   });

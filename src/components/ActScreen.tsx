@@ -1,45 +1,56 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Copy, Mail } from 'lucide-react';
-import { ENVIRONMENT_OFFICE_EMAIL, GREYSTONES_COUNCILLORS } from '../data/councillors';
-import { buildCouncillorEmail, TONE_OPTIONS } from '../lib/emailBuilder';
+import { town } from '../config/town';
+import { buildCouncillorEmail } from '../lib/emailBuilder';
 import { monthlyReportStat } from '../lib/monthlyStat';
-import type { Report, ToneId } from '../types';
+import type { Report } from '../types';
 
 interface ActScreenProps {
   reports: Report[];
   now?: Date;
 }
 
+const emailContacts = town.councilContacts.filter((contact) => contact.email);
+const phoneContacts = town.councilContacts.filter((contact) => contact.phone);
+const firstToneId = town.email.templates[0].id;
+
 export function ActScreen({ reports, now = new Date() }: ActScreenProps) {
   const [open, setOpen] = useState(false);
-  const [toneId, setToneId] = useState<ToneId>('factual');
-  const [selectedIds, setSelectedIds] = useState<string[]>(GREYSTONES_COUNCILLORS.map((c) => c.id));
-  const [includeOffice, setIncludeOffice] = useState(true);
-  const [signOff, setSignOff] = useState('A Greystones resident');
+  const [toneId, setToneId] = useState(firstToneId);
+  const [selectedIds, setSelectedIds] = useState<string[]>(town.councillors.map((councillor) => councillor.id));
+  const [contactIds, setContactIds] = useState<string[]>(
+    emailContacts.filter((contact) => contact.defaultCc).map((contact) => contact.id),
+  );
+  const [signOff, setSignOff] = useState(town.email.signOffFallback);
   const [notice, setNotice] = useState('');
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const signOffId = useId();
-  const officeId = useId();
-  const stat = monthlyReportStat(reports, now);
+  const stat = monthlyReportStat(reports, now, town.timeZone);
 
   const draft = useMemo(
     () =>
-      buildCouncillorEmail({
+      buildCouncillorEmail(town, {
         toneId,
         councillorIds: selectedIds,
-        includeEnvironmentOffice: includeOffice,
+        contactIds,
         signOff,
         stat,
       }),
-    [toneId, selectedIds, includeOffice, signOff, stat],
+    [toneId, selectedIds, contactIds, signOff, stat],
   );
 
   useEffect(() => {
-    if (open) document.getElementById('tone-factual')?.focus();
+    if (open) document.getElementById(`tone-${firstToneId}`)?.focus();
   }, [open]);
 
   function toggleCouncillor(id: string) {
     setSelectedIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  }
+
+  function toggleContact(id: string) {
+    setContactIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
     );
   }
@@ -58,9 +69,7 @@ export function ActScreen({ reports, now = new Date() }: ActScreenProps) {
       <div className="mx-auto flex h-full max-w-md flex-col justify-between px-4 py-6">
         <div>
           <h2 className="font-display text-2xl font-semibold text-ink">Tell your councillors</h2>
-          <p className="mt-2 text-base leading-relaxed text-muted">
-            Write to the six Greystones Municipal District councillors. Nothing is sent until you send it from your own email app.
-          </p>
+          <p className="mt-2 text-base leading-relaxed text-muted">{town.act.intro}</p>
         </div>
         <button
           ref={openButtonRef}
@@ -100,7 +109,7 @@ export function ActScreen({ reports, now = new Date() }: ActScreenProps) {
       >
         <fieldset className="space-y-2">
           <legend className="text-sm font-semibold text-ink">Tone</legend>
-          {TONE_OPTIONS.map((tone) => (
+          {town.email.templates.map((tone) => (
             <div key={tone.id} className="rounded-xl border border-line bg-white px-3 py-2">
               <input
                 id={`tone-${tone.id}`}
@@ -121,7 +130,7 @@ export function ActScreen({ reports, now = new Date() }: ActScreenProps) {
 
         <fieldset className="space-y-2">
           <legend className="text-sm font-semibold text-ink">Councillors</legend>
-          {GREYSTONES_COUNCILLORS.map((councillor) => (
+          {town.councillors.map((councillor) => (
             <div key={councillor.id} className="flex items-start gap-2 rounded-xl border border-line bg-white px-3 py-2">
               <input
                 id={`councillor-${councillor.id}`}
@@ -139,20 +148,25 @@ export function ActScreen({ reports, now = new Date() }: ActScreenProps) {
           ))}
         </fieldset>
 
-        <div className="flex items-start gap-2">
-          <input
-            id={officeId}
-            name="copy-environment-office"
-            type="checkbox"
-            checked={includeOffice}
-            onChange={(event) => setIncludeOffice(event.target.checked)}
-            className="mt-1 accent-primary"
-          />
-          <label htmlFor={officeId} className="text-sm text-ink">
-            Also copy the environment office
-            <span className="mt-0.5 block break-all text-muted">{ENVIRONMENT_OFFICE_EMAIL}</span>
-          </label>
-        </div>
+        {emailContacts.map((contact) => {
+          const contactId = `contact-${contact.id}`;
+          return (
+            <div key={contact.id} className="flex items-start gap-2">
+              <input
+                id={contactId}
+                name="council-contacts"
+                type="checkbox"
+                checked={contactIds.includes(contact.id)}
+                onChange={() => toggleContact(contact.id)}
+                className="mt-1 accent-primary"
+              />
+              <label htmlFor={contactId} className="text-sm text-ink">
+                Also copy the {contact.name.toLowerCase()}
+                <span className="mt-0.5 block break-all text-muted">{contact.email}</span>
+              </label>
+            </div>
+          );
+        })}
 
         <div className="space-y-1">
           <label htmlFor={signOffId} className="text-sm font-semibold text-ink">
@@ -204,7 +218,11 @@ export function ActScreen({ reports, now = new Date() }: ActScreenProps) {
           <p className="text-center text-sm text-muted" role="status">
             {notice || 'This app never sends email.'}
           </p>
-          <p className="text-center text-sm text-muted">Council litter line 1800 365 123</p>
+          {phoneContacts.map((contact) => (
+            <p key={contact.id} className="text-center text-sm text-muted">
+              {contact.phoneLabel ?? contact.name} {contact.phone}
+            </p>
+          ))}
         </div>
       </form>
     </div>

@@ -4,7 +4,7 @@ export interface MonthStat {
   delta: number;
 }
 
-export function yearMonth(date: Date, timeZone = 'Europe/Dublin'): { year: number; month: number } {
+export function yearMonth(date: Date, timeZone = 'UTC'): { year: number; month: number } {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone,
     year: 'numeric',
@@ -24,7 +24,7 @@ export function previousMonth(year: number, month: number): { year: number; mont
 export function sameMonth(
   createdAt: string,
   target: { year: number; month: number },
-  timeZone = 'Europe/Dublin',
+  timeZone = 'UTC',
 ): boolean {
   const stamp = yearMonth(new Date(createdAt), timeZone);
   return stamp.year === target.year && stamp.month === target.month;
@@ -34,7 +34,7 @@ export function sameMonth(
 export function monthlyReportStat(
   reports: { createdAt: string }[],
   now: Date,
-  timeZone = 'Europe/Dublin',
+  timeZone = 'UTC',
 ): MonthStat {
   const current = yearMonth(now, timeZone);
   const previous = previousMonth(current.year, current.month);

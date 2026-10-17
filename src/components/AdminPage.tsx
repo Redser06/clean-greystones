@@ -1,24 +1,20 @@
 import { useMemo, useState } from 'react';
-import { LITTER_BINS } from '../data/litterBins';
+import { LITTER_BINS, town } from '../config/town';
 import { councilReportCsv, councilReportMarkdown } from '../lib/councilExport';
 import { nearBinSentence, summariseBinDistance } from '../lib/binDistance';
 import { headlineStat, monthlyReportStat, trendSentence } from '../lib/monthlyStat';
 import { isDemoEnabled, reportsForSession } from '../lib/reportFlow';
 import { readStoredReports } from '../lib/storage';
-import {
-  LITTERING_FIXED_PAYMENT_NOTE,
-  LITTERING_FIXED_PAYMENT_URL,
-  LITTER_ACT_OFFENCE,
-  LITTER_ACT_SECTION_22_URL,
-} from '../lib/legal';
 
 function loadReports() {
   try {
-    const stored = readStoredReports(window.localStorage);
+    const stored = readStoredReports(window.localStorage, town.storageKey);
     return reportsForSession({
       demo: isDemoEnabled(import.meta.env.VITE_DEMO_DATA),
       stored,
       now: new Date(),
+      samples: town.demoReports,
+      timeZone: town.timeZone,
     });
   } catch {
     return [];
@@ -39,7 +35,7 @@ export function AdminPage() {
   const [now] = useState(() => new Date());
   const reports = useMemo(() => loadReports(), []);
   const summary = summariseBinDistance(reports, LITTER_BINS);
-  const stat = monthlyReportStat(reports, now);
+  const stat = monthlyReportStat(reports, now, town.timeZone);
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl bg-canvas px-4 py-6 text-ink">
@@ -74,16 +70,16 @@ export function AdminPage() {
         <h2 id="admin-law" className="text-sm font-semibold">
           Law
         </h2>
-        <p>{LITTER_ACT_OFFENCE}</p>
+        <p>{town.legal.offence}</p>
         <p>
-          <a className="font-medium text-primary underline" href={LITTER_ACT_SECTION_22_URL}>
-            Litter Pollution Act 1997, section 22
+          <a className="font-medium text-primary underline" href={town.legal.citationUrl}>
+            {town.legal.citationLabel}
           </a>
         </p>
-        <p>{LITTERING_FIXED_PAYMENT_NOTE}</p>
+        <p>{town.legal.fixedPaymentNote}</p>
         <p>
-          <a className="font-medium text-primary underline" href={LITTERING_FIXED_PAYMENT_URL}>
-            Department notice, 1 September 2026
+          <a className="font-medium text-primary underline" href={town.legal.fixedPaymentUrl}>
+            {town.legal.fixedPaymentLabel}
           </a>
         </p>
       </section>
@@ -94,8 +90,8 @@ export function AdminPage() {
           className="h-11 rounded-xl bg-primary px-4 text-sm font-semibold text-white"
           onClick={() =>
             download(
-              'greystones-dog-fouling.md',
-              councilReportMarkdown(reports, LITTER_BINS, now),
+              `${town.exportSlug}.md`,
+              councilReportMarkdown(town, reports, LITTER_BINS, now),
               'text/markdown',
             )
           }
@@ -106,7 +102,7 @@ export function AdminPage() {
           type="button"
           className="h-11 rounded-xl border border-line bg-white px-4 text-sm font-semibold"
           onClick={() =>
-            download('greystones-dog-fouling.csv', councilReportCsv(reports, LITTER_BINS), 'text/csv')
+            download(`${town.exportSlug}.csv`, councilReportCsv(reports, LITTER_BINS), 'text/csv')
           }
         >
           Download CSV

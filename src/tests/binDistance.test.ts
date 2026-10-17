@@ -9,13 +9,17 @@ import {
   summariseBinDistance,
   type GeoJsonPointCollection,
 } from '../lib/binDistance';
+import { validateTownConfig } from '../config/schema';
 import { councilReportMarkdown } from '../lib/councilExport';
 import { haversineMetres } from '../lib/geo';
 import { createReport } from '../lib/reportFlow';
 import type { LitterBin } from '../types';
 
+const town = validateTownConfig(
+  JSON.parse(readFileSync(new URL('../../data/towns/greystones.json', import.meta.url), 'utf8')),
+);
 const geojson = JSON.parse(
-  readFileSync(new URL('../../osm_bins_2026-10-16.geojson', import.meta.url), 'utf8'),
+  readFileSync(new URL(`../../${town.litterBinsFile}`, import.meta.url), 'utf8'),
 ) as GeoJsonPointCollection;
 
 describe('bin distance', () => {
@@ -62,7 +66,7 @@ describe('bin distance', () => {
       createReport({ lat: 53.14431, lng: -6.06047, id: 'near', now: new Date('2026-10-04T12:00:00Z') }),
       createReport({ lat: 53.1332, lng: -6.0664, id: 'far', now: new Date('2026-09-11T12:00:00Z') }),
     ];
-    const markdown = councilReportMarkdown(reports, bins, new Date('2026-10-17T12:00:00Z'));
+    const markdown = councilReportMarkdown(town, reports, bins, new Date('2026-10-17T12:00:00Z'));
     const summary = summariseBinDistance(reports, bins);
     assert.ok(markdown.includes(nearBinSentence(summary)));
     assert.match(markdown, /not a verified dog-fouling penalty amount/);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BarChart3, Mail, MapPin } from 'lucide-react';
+import { town } from '../config/town';
 import type { Report } from '../types';
 import { isDemoEnabled, reportsForSession } from '../lib/reportFlow';
 import { readStoredReports, writeStoredReports } from '../lib/storage';
@@ -27,28 +28,28 @@ export function ResidentApp() {
   const [tab, setTab] = useState<Tab>('report');
   const [reports, setReports] = useState<Report[]>(() => {
     const store = browserStore();
-    const stored = store ? readStoredReports(store) : null;
+    const stored = store ? readStoredReports(store, town.storageKey) : null;
     return reportsForSession({
       demo: isDemoEnabled(import.meta.env.VITE_DEMO_DATA),
       stored,
       now: new Date(),
+      samples: town.demoReports,
+      timeZone: town.timeZone,
     });
   });
 
   useEffect(() => {
     const store = browserStore();
-    if (store) writeStoredReports(store, reports);
+    if (store) writeStoredReports(store, reports, town.storageKey);
   }, [reports]);
 
   return (
     <div className="flex h-dvh flex-col bg-canvas text-ink">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-white px-4">
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-white" aria-hidden="true">
-          <MapPin size={18} />
-        </span>
+        <img src={town.branding.logo} alt="" className="h-8 w-8 rounded-lg" />
         <div className="min-w-0">
-          <h1 className="font-display text-base font-semibold leading-tight">Clean Greystones</h1>
-          <p className="truncate text-xs text-muted">Report dog fouling in Greystones</p>
+          <h1 className="font-display text-base font-semibold leading-tight">{town.branding.name}</h1>
+          <p className="truncate text-xs text-muted">{town.branding.tagline}</p>
         </div>
       </header>
 

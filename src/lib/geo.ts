@@ -1,5 +1,3 @@
-export const GREYSTONES_CENTRE = { lat: 53.1443, lng: -6.0632 };
-
 export function roundCoord(value: number): number {
   return Number(value.toFixed(6));
 }

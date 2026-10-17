@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { town } from '../config/town';
 import type { Report } from '../types';
 import { clusterReports } from '../lib/cluster';
 import { headlineStat, monthlyReportStat, sameMonth, trendSentence, yearMonth } from '../lib/monthlyStat';
@@ -10,10 +11,14 @@ interface PictureScreenProps {
 }
 
 export function PictureScreen({ reports, now = new Date() }: PictureScreenProps) {
-  const stat = monthlyReportStat(reports, now);
+  const stat = monthlyReportStat(reports, now, town.timeZone);
   const points = useMemo<MapPoint[]>(
     () =>
-      clusterReports(reports.filter((report) => sameMonth(report.createdAt, yearMonth(now)))).map((cluster) => ({
+      clusterReports(
+        reports.filter((report) => sameMonth(report.createdAt, yearMonth(now, town.timeZone), town.timeZone)),
+        160,
+        town.map.centre.lat,
+      ).map((cluster) => ({
         id: cluster.id,
         lat: cluster.lat,
         lng: cluster.lng,
@@ -32,7 +37,14 @@ export function PictureScreen({ reports, now = new Date() }: PictureScreenProps)
         <p className="mt-1 text-base text-muted">{trendSentence(stat)}</p>
       </section>
       <div className="min-h-0 flex-1">
-        <MapView points={points} zoom={13} />
+        <MapView
+          points={points}
+          zoom={town.map.pictureZoom}
+          centre={town.map.centre}
+          bounds={town.map.bounds}
+          colour={town.branding.primaryColour}
+          label={`Map of ${town.name}`}
+        />
       </div>
     </div>
   );

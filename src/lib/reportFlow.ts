@@ -1,6 +1,7 @@
+import type { DemoReportSample } from '../config/schema';
 import type { Impact, Report } from '../types';
 import { roundCoord } from './geo';
-import { previousMonth, yearMonth } from './monthlyStat';
+import { yearMonth } from './monthlyStat';
 
 export function createReportId(now: Date, random = Math.random()): string {
   return `r-${now.getTime().toString(36)}-${random.toString(36).slice(2, 8)}`;
@@ -58,32 +59,35 @@ export function isReport(value: unknown): value is Report {
   );
 }
 
+function shiftMonth(year: number, month: number, offset: number): { year: number; month: number } {
+  const index = year * 12 + (month - 1) + offset;
+  const nextYear = Math.floor(index / 12);
+  return { year: nextYear, month: index - nextYear * 12 + 1 };
+}
+
 /** Demo coordinates only. No quotes, confirmation counts, or invented totals. */
-export function buildDemoReports(now: Date): Report[] {
-  const current = yearMonth(now);
-  const previous = previousMonth(current.year, current.month);
-  const at = (year: number, month: number, day: number, lat: number, lng: number, id: string): Report =>
-    createReport({
-      id,
-      lat,
-      lng,
-      now: new Date(Date.UTC(year, month - 1, day, 12, 0, 0)),
+export function buildDemoReports(now: Date, samples: DemoReportSample[], timeZone: string): Report[] {
+  const current = yearMonth(now, timeZone);
+  return samples.map((sample) => {
+    const stamp = shiftMonth(current.year, current.month, sample.monthOffset);
+    return createReport({
+      id: sample.id,
+      lat: sample.lat,
+      lng: sample.lng,
+      now: new Date(Date.UTC(stamp.year, stamp.month - 1, sample.day, 12, 0, 0)),
     });
-  return [
-    at(current.year, current.month, 4, 53.14431, -6.06047, 'demo-beach'),
-    at(current.year, current.month, 9, 53.14527, -6.0639, 'demo-church'),
-    at(current.year, current.month, 14, 53.1489, -6.0634, 'demo-harbour'),
-    at(previous.year, previous.month, 11, 53.1422, -6.0594, 'demo-last-month'),
-  ];
+  });
 }
 
 export function reportsForSession(options: {
   demo: boolean;
   stored: Report[] | null;
   now: Date;
+  samples?: DemoReportSample[];
+  timeZone?: string;
 }): Report[] {
   if (options.stored) return options.stored;
-  if (options.demo) return buildDemoReports(options.now);
+  if (options.demo) return buildDemoReports(options.now, options.samples ?? [], options.timeZone ?? 'UTC');
   return [];
 }
 

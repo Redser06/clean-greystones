@@ -14,11 +14,3 @@ export interface LitterBin {
   lat: number;
   lng: number;
 }
-
-export type ToneId = 'factual' | 'patrols' | 'bins';
-
-export interface Councillor {
-  id: string;
-  name: string;
-  email: string;
-}

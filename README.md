@@ -35,3 +35,14 @@ npm run dev
 ## Hosting
 
 Firebase Hosting for project `rapid-prototyping-4134c` serves the `dist` folder (`firebase.json`). This repository does not contain a workflow that deploys a live or preview channel. Pull requests run `.github/workflows/ci.yml` only: lint, typecheck, test and build.
+
+## Use it for your town
+
+Town names, maps, councillors, council contacts, legal wording, email templates, and branding live in one JSON file per town. The default is `data/towns/greystones.json`. Components read that file through `src/config/town.ts`. Set `VITE_TOWN` to choose a different file; when it is unset, the build uses greystones.
+
+1. Fork the repository.
+2. Copy `data/towns/greystones.json` to `data/towns/your-town.json`. Change the town name, map centre and bounds, councillors and their emails, council contacts, legal citations and fine wording, email templates, and branding (name, primary colour, and logo). Put the logo in `public/` and set `branding.logo` to that path, for example `/towns/your-town.svg`. Point `litterBinsFile` at your own OpenStreetMap litter-bin extract under `data/bins/`.
+3. Copy `.env.example` to `.env`. Set `VITE_TOWN` to the file name without `.json`. Add `VITE_GOOGLE_MAPS_API_KEY` only if you want Google Streets tiles. Leave `VITE_DEMO_DATA` unset for a production build. `.env*` files are gitignored, except `.env.example`, which lists every variable and has no values. Do not commit a key.
+4. Run `npm test` to check the config, then `npm run build`. Deploy the `dist` folder to Firebase Hosting or any other static host.
+
+The app still never sends email. It opens the resident's own mail app, or copies the message. A licence file is not included; choose one before you publish a fork.

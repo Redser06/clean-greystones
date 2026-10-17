@@ -1,10 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { COUNCILLOR_EMAILS, GREYSTONES_COUNCILLORS } from '../data/councillors';
-import { buildCouncillorEmail, buildMailto, TONE_OPTIONS } from '../lib/emailBuilder';
-import { LITTER_ACT_SECTION_22_URL } from '../lib/legal';
+import { readFileSync } from 'node:fs';
+import { validateTownConfig } from '../config/schema';
+import { buildCouncillorEmail, buildMailto } from '../lib/emailBuilder';
 import type { MonthStat } from '../lib/monthlyStat';
 
+const town = validateTownConfig(
+  JSON.parse(readFileSync(new URL('../../data/towns/greystones.json', import.meta.url), 'utf8')),
+);
+const councillorEmails = town.councillors.map((councillor) => councillor.email);
 const stat: MonthStat = { thisMonth: 4, lastMonth: 2, delta: 2 };
 
 function decodeBody(mailto: string): string {
@@ -14,10 +18,10 @@ function decodeBody(mailto: string): string {
 
 describe('email builder', () => {
   it('offers three polite tones and preselects the six councillors', () => {
-    assert.equal(TONE_OPTIONS.length, 3);
-    assert.equal(GREYSTONES_COUNCILLORS.length, 6);
+    assert.equal(town.email.templates.length, 3);
+    assert.equal(town.councillors.length, 6);
     assert.deepEqual(
-      COUNCILLOR_EMAILS.sort(),
+      councillorEmails.sort(),
       [
         'lfenelongaskin@wicklowcoco.ie',
         'lscott@wicklowcoco.ie',
@@ -30,17 +34,17 @@ describe('email builder', () => {
   });
 
   it('encodes a mailto that round-trips the subject, body and recipients', () => {
-    const draft = buildCouncillorEmail({
+    const draft = buildCouncillorEmail(town, {
       toneId: 'patrols',
-      councillorIds: GREYSTONES_COUNCILLORS.map((councillor) => councillor.id),
-      includeEnvironmentOffice: true,
+      councillorIds: town.councillors.map((councillor) => councillor.id),
+      contactIds: ['environment-office'],
       signOff: 'Alex',
       stat,
     });
 
     assert.equal(draft.canSend, true);
     assert.equal(draft.to.length, 6);
-    for (const email of COUNCILLOR_EMAILS) {
+    for (const email of councillorEmails) {
       assert.ok(draft.mailto.startsWith('mailto:') && draft.mailto.includes(email));
     }
     assert.match(draft.mailto, /cc=envcomplaints%40wicklowcoco\.ie/);
@@ -48,7 +52,7 @@ describe('email builder', () => {
     const body = decodeBody(draft.mailto);
     assert.equal(body, draft.body);
     assert.match(body, /4 reports this month, 2 more than last month/);
-    assert.match(body, new RegExp(LITTER_ACT_SECTION_22_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(body, new RegExp(town.legal.citationUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(body, /may result in a fixed penalty/);
     assert.match(body, /Kind regards,\nAlex/);
     assert.doesNotMatch(body, /€250|Verified|Myth-Buster|Bombard/);
@@ -56,10 +60,10 @@ describe('email builder', () => {
   });
 
   it('omits a councillor who is not selected and refuses an empty recipient list', () => {
-    const one = buildCouncillorEmail({
+    const one = buildCouncillorEmail(town, {
       toneId: 'factual',
       councillorIds: ['cllr-stokes'],
-      includeEnvironmentOffice: false,
+      contactIds: [],
       signOff: 'A Greystones resident',
       stat,
     });
@@ -68,10 +72,10 @@ describe('email builder', () => {
     assert.doesNotMatch(one.mailto, /lscott@wicklowcoco\.ie/);
     assert.match(one.mailto, /subject=Dog%20fouling%20reports%20in%20Greystones/);
 
-    const none = buildCouncillorEmail({
+    const none = buildCouncillorEmail(town, {
       toneId: 'bins',
       councillorIds: [],
-      includeEnvironmentOffice: true,
+      contactIds: ['environment-office'],
       signOff: '',
       stat,
     });

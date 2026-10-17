@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import type { LatLng, TownBounds } from '../config/schema';
 import { basemapForKey, osmBasemap } from '../lib/basemap';
-import { GREYSTONES_CENTRE } from '../lib/geo';
 
 export interface MapPoint {
   id: string;
@@ -15,12 +15,26 @@ export interface MapPoint {
 interface MapViewProps {
   points: MapPoint[];
   zoom: number;
+  centre: LatLng;
+  bounds: TownBounds;
+  colour: string;
+  label: string;
   focus?: { lat: number; lng: number; nonce: string } | null;
   attributionInset?: number;
   onMovePoint?: (id: string, lat: number, lng: number) => void;
 }
 
-export function MapView({ points, zoom, focus, attributionInset = 8, onMovePoint }: MapViewProps) {
+export function MapView({
+  points,
+  zoom,
+  centre,
+  bounds,
+  colour,
+  label,
+  focus,
+  attributionInset = 8,
+  onMovePoint,
+}: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tilesRef = useRef<L.TileLayer | null>(null);
@@ -33,8 +47,13 @@ export function MapView({ points, zoom, focus, attributionInset = 8, onMovePoint
     if (!element) return;
 
     const map = L.map(element, {
-      center: [GREYSTONES_CENTRE.lat, GREYSTONES_CENTRE.lng],
+      center: [centre.lat, centre.lng],
       zoom,
+      maxBounds: [
+        [bounds.south, bounds.west],
+        [bounds.north, bounds.east],
+      ],
+      maxBoundsViscosity: 1,
       zoomControl: false,
       attributionControl: true,
     });
@@ -69,7 +88,7 @@ export function MapView({ points, zoom, focus, attributionInset = 8, onMovePoint
       tilesRef.current = null;
       layerRef.current = null;
     };
-  }, [zoom]);
+  }, [zoom, centre, bounds]);
 
   useEffect(() => {
     if (!focus || !mapRef.current) return;
@@ -108,21 +127,21 @@ export function MapView({ points, zoom, focus, attributionInset = 8, onMovePoint
         radius: point.count > 1 ? Math.min(22, 8 + point.count * 2) : 7,
         color: '#ffffff',
         weight: 2,
-        fillColor: '#006948',
+        fillColor: colour,
         fillOpacity: 0.92,
       });
       const noun = point.count === 1 ? 'report' : 'reports';
       marker.bindTooltip(`${point.count} ${noun}`, { direction: 'top' });
       marker.addTo(group);
     }
-  }, [points]);
+  }, [points, colour]);
 
   return (
     <div
       ref={containerRef}
       className="cg-map h-full w-full"
       role="application"
-      aria-label="Map of Greystones"
+      aria-label={label}
       style={{ ['--cg-inset' as string]: `${attributionInset}px` }}
     />
   );

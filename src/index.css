@@ -4,6 +4,7 @@
 
 :root {
   color-scheme: light;
+  --color-primary: 15 23 42;
 }
 
 body {
@@ -13,7 +14,7 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid #006948;
+  outline: 2px solid rgb(var(--color-primary));
   outline-offset: 2px;
 }
 
@@ -41,7 +42,7 @@ body {
   height: 22px;
   border: 2px solid #ffffff;
   border-radius: 999px 999px 999px 2px;
-  background: #006948;
+  background: rgb(var(--color-primary));
   box-shadow: 0 2px 6px rgba(11, 28, 48, 0.35);
   transform: rotate(-45deg);
 }
