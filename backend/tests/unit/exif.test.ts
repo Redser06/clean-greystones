@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { stripExif, stripJpegExif, shouldStripUpload } from '../../exif';
 import { stripExifOnUpload } from '../../functions/stripExif';
-import { decideAdminGrant } from '../../claims';
+import { readFileSync } from 'node:fs';
+import { adminEmailsFromArgs, decideAdminGrant, readAdminEmails } from '../../claims';
 
 function jpegWithExif(): Uint8Array {
   const exif = new TextEncoder().encode('Exif\0\0GPS');
@@ -54,5 +55,24 @@ describe('exif and admin claims', () => {
       allowlist: ['person@example.com'],
       currentTowns: [],
     }).ok, false);
+  });
+
+  it('reads organiser emails from the env or CLI and not from the town file', () => {
+    assert.deepEqual(readAdminEmails(' Person@Example.com, other@example.com '), [
+      'person@example.com',
+      'other@example.com',
+    ]);
+    assert.deepEqual(readAdminEmails(undefined), []);
+    assert.deepEqual(readAdminEmails(''), []);
+    assert.deepEqual(adminEmailsFromArgs(['--emails', 'a@example.com'], 'b@example.com'), ['a@example.com']);
+    assert.deepEqual(adminEmailsFromArgs(['--emails=a@example.com'], undefined), ['a@example.com']);
+    assert.deepEqual(adminEmailsFromArgs([], 'b@example.com'), ['b@example.com']);
+    const town = JSON.parse(readFileSync(new URL('../../../data/towns/greystones.json', import.meta.url), 'utf8')) as {
+      adminAllowlist: string[];
+    };
+    assert.deepEqual(town.adminAllowlist, []);
+    const script = readFileSync(new URL('../../scripts/grant-admins.ts', import.meta.url), 'utf8');
+    assert.equal(script.includes('gmail.com'), false);
+    assert.equal(script.includes('adminAllowlist'), false);
   });
 });

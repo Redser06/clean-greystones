@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { countForEvidence } from '../data/evidence';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { countForEvidence, deliverCouncillorEmail, SAMPLE_EMAIL_RECIPIENT } from '../data/evidence';
 import { isDemo } from '../config/mode';
 import { nextRateWindow } from '../data/firestorePaths';
 import { exportReportsToCsv, withSampleMarker } from '../utils/adminAnalytics';
@@ -25,6 +28,27 @@ describe('demo gate', () => {
     assert.throws(() => countForEvidence(rows, own, true), /unavailable in demo mode/);
     assert.equal(countForEvidence(rows, own, false), 1);
     assert.equal(countForEvidence(rows, own), 1);
+  });
+
+  it('refuses a sendable councillor email in demo', () => {
+    const to = ['sstokes@wicklowcoco.ie', 'lscott@wicklowcoco.ie'];
+    const cc = ['envcomplaints@wicklowcoco.ie', 'simon.harris@oireachtas.ie'];
+    const demo = deliverCouncillorEmail(to, cc, true);
+    assert.equal(demo.sendable, false);
+    assert.equal(demo.sample, 'SAMPLE');
+    assert.deepEqual(demo.toEmails, [SAMPLE_EMAIL_RECIPIENT]);
+    assert.deepEqual(demo.ccEmails, []);
+    const recipients = [...demo.toEmails, ...demo.ccEmails].join(' ');
+    assert.equal(recipients.includes('wicklowcoco.ie'), false);
+    assert.equal(recipients.includes('oireachtas.ie'), false);
+    const live = deliverCouncillorEmail(to, cc, false);
+    assert.equal(live.sendable, true);
+    assert.equal(live.sample, undefined);
+    assert.deepEqual(live.toEmails, to);
+    assert.deepEqual(live.ccEmails, cc);
+    const app = readFileSync(join(fileURLToPath(new URL('..', import.meta.url)), 'App.tsx'), 'utf8');
+    assert.equal(/catch\s*\{[^}]*totalActiveReports/.test(app), false);
+    assert.equal(app.includes('deliverCouncillorEmail'), true);
   });
 
   it('stamps SAMPLE on demo exports and marks every seed is_seeded_demo', () => {

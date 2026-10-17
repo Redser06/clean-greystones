@@ -1,11 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-  GoogleAuthProvider,
-  OAuthProvider,
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut as firebaseSignOut,
-} from 'firebase/auth';
 import { civicFirebase } from '../lib/firebaseClient';
 
 export interface CivicUser {
@@ -38,16 +31,9 @@ function townsFromUser(claims: Record<string, unknown>): string[] {
   return towns.filter((town): town is string => typeof town === 'string');
 }
 
-async function signInWithProvider(provider: GoogleAuthProvider | OAuthProvider): Promise<SignInResult> {
-  const client = civicFirebase();
-  if (!client) return { ok: false, message: NOT_CONFIGURED };
-  try {
-    await signInWithPopup(client.auth, provider);
-    return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Sign-in failed.';
-    return { ok: false, message };
-  }
+async function authClient() {
+  const [auth, client] = await Promise.all([import('firebase/auth'), civicFirebase()]);
+  return { auth, client };
 }
 
 /** Auth API for the admin screen. Admin means a town is present on the custom claim. */
@@ -56,27 +42,36 @@ export function useCivicAuth(): CivicAuthApi {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const client = civicFirebase();
-    if (!client) {
-      setUser(null);
-      setReady(true);
-      return;
-    }
-    return onAuthStateChanged(client.auth, (firebaseUser) => {
-      if (!firebaseUser) {
+    let unsubscribe = () => {};
+    let cancelled = false;
+    void (async () => {
+      const { auth, client } = await authClient();
+      if (cancelled) return;
+      if (!client) {
         setUser(null);
         setReady(true);
         return;
       }
-      void firebaseUser.getIdTokenResult().then((token) => {
-        setUser({
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          towns: townsFromUser(token.claims),
+      unsubscribe = auth.onAuthStateChanged(client.auth, (firebaseUser) => {
+        if (!firebaseUser) {
+          setUser(null);
+          setReady(true);
+          return;
+        }
+        void firebaseUser.getIdTokenResult().then((token) => {
+          setUser({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            towns: townsFromUser(token.claims),
+          });
+          setReady(true);
         });
-        setReady(true);
       });
-    });
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   const isAdmin = useCallback(
@@ -84,20 +79,34 @@ export function useCivicAuth(): CivicAuthApi {
     [user],
   );
 
-  const signInWithGoogle = useCallback(
-    () => signInWithProvider(new GoogleAuthProvider()),
-    [],
-  );
+  const signInWithGoogle = useCallback(async () => {
+    const { auth, client } = await authClient();
+    if (!client) return { ok: false, message: NOT_CONFIGURED };
+    try {
+      await auth.signInWithPopup(client.auth, new auth.GoogleAuthProvider());
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Sign-in failed.';
+      return { ok: false, message };
+    }
+  }, []);
 
-  const signInWithApple = useCallback(
-    () => signInWithProvider(new OAuthProvider('apple.com')),
-    [],
-  );
+  const signInWithApple = useCallback(async () => {
+    const { auth, client } = await authClient();
+    if (!client) return { ok: false, message: NOT_CONFIGURED };
+    try {
+      await auth.signInWithPopup(client.auth, new auth.OAuthProvider('apple.com'));
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Sign-in failed.';
+      return { ok: false, message };
+    }
+  }, []);
 
   const signOut = useCallback(async () => {
-    const client = civicFirebase();
+    const { auth, client } = await authClient();
     if (!client) return;
-    await firebaseSignOut(client.auth);
+    await auth.signOut(client.auth);
   }, []);
 
   return { user, ready, isAdmin, signInWithGoogle, signInWithApple, signOut };

@@ -1,7 +1,7 @@
-import { initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, type Auth } from 'firebase/auth';
-import { getFirestore, type Firestore } from 'firebase/firestore';
-import { getStorage, type FirebaseStorage } from 'firebase/storage';
+import type { FirebaseApp } from 'firebase/app';
+import type { Auth } from 'firebase/auth';
+import type { Firestore } from 'firebase/firestore';
+import type { FirebaseStorage } from 'firebase/storage';
 
 export interface FirebaseWebConfig {
   apiKey: string;
@@ -34,19 +34,27 @@ export interface CivicFirebase {
   storage: FirebaseStorage;
 }
 
-let cached: CivicFirebase | null = null;
+let pending: Promise<CivicFirebase | null> | null = null;
 
-export function civicFirebase(): CivicFirebase | null {
+export function civicFirebase(): Promise<CivicFirebase | null> {
   const config = readFirebaseWebConfig();
-  if (!config) return null;
-  if (!cached) {
-    const app = initializeApp(config);
-    cached = {
-      app,
-      auth: getAuth(app),
-      db: getFirestore(app),
-      storage: getStorage(app),
-    };
-  }
-  return cached;
+  if (!config) return Promise.resolve(null);
+  if (!pending) pending = loadFirebase(config);
+  return pending;
+}
+
+async function loadFirebase(config: FirebaseWebConfig): Promise<CivicFirebase> {
+  const [{ initializeApp }, { getAuth }, { getFirestore }, { getStorage }] = await Promise.all([
+    import('firebase/app'),
+    import('firebase/auth'),
+    import('firebase/firestore'),
+    import('firebase/storage'),
+  ]);
+  const app = initializeApp(config);
+  return {
+    app,
+    auth: getAuth(app),
+    db: getFirestore(app),
+    storage: getStorage(app),
+  };
 }

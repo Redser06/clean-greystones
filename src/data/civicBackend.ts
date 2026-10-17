@@ -1,16 +1,4 @@
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  serverTimestamp,
-  where,
-  writeBatch,
-  type Timestamp,
-} from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth';
-import { ref, uploadBytes } from 'firebase/storage';
+import type { Timestamp } from 'firebase/firestore';
 import { isDemo } from '../config/mode';
 import { town } from '../config/town';
 import { civicFirebase } from '../lib/firebaseClient';
@@ -64,9 +52,13 @@ export async function submitResidentReport(
 ): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
   if (isDemo) return { ok: false, reason: 'demo-local' };
   if (report.isSeededDemo || report.is_seeded_demo) return { ok: false, reason: 'seeded' };
-  const client = civicFirebase();
+  const client = await civicFirebase();
   if (!client) return { ok: false, reason: 'unconfigured' };
 
+  const [{ doc, getDoc, serverTimestamp, writeBatch }, { signInAnonymously }] = await Promise.all([
+    import('firebase/firestore'),
+    import('firebase/auth'),
+  ]);
   const user = client.auth.currentUser ?? (await signInAnonymously(client.auth)).user;
   const mode = dataMode();
   const appId = thisAppId();
@@ -112,8 +104,9 @@ export async function submitResidentReport(
 
 export async function loadResidentReports(): Promise<FoulingReport[]> {
   if (isDemo) return [];
-  const client = civicFirebase();
+  const client = await civicFirebase();
   if (!client?.auth.currentUser) return [];
+  const { collection, getDocs, query, where } = await import('firebase/firestore');
   const mode = dataMode();
   const appId = thisAppId();
   const snapshot = await getDocs(
@@ -154,12 +147,13 @@ export async function uploadReportPhoto(
   contentType: string,
 ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
   if (isDemo) return { ok: false, reason: 'demo-local' };
-  const client = civicFirebase();
+  const client = await civicFirebase();
   if (!client?.auth.currentUser) return { ok: false, reason: 'signed-out' };
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
     return { ok: false, reason: 'content-type' };
   }
   if (file.size >= 5 * 1024 * 1024) return { ok: false, reason: 'too-large' };
+  const { ref, uploadBytes } = await import('firebase/storage');
   const mode = dataMode();
   const appId = thisAppId();
   const path = photoStoragePath(mode, town.townId, appId, reportId, 'photo');

@@ -204,10 +204,15 @@ describe('firestore and storage rules', () => {
     ));
   });
 
-  it('limits photo uploads by size, type, and app/town/mode metadata', async () => {
+  it('limits photo uploads by size, type, file name, and app/town/mode metadata', async () => {
     const uid = 'resident-photo';
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await context.firestore().doc('modes/prod/towns/greystones/apps/litter/reports/rep-photo').set({ authorUid: uid });
+      await context.firestore().doc('modes/prod/towns/greystones/apps/litter/reports/rep-gif').set({ authorUid: uid });
+      await context.firestore().doc('modes/prod/towns/greystones/apps/litter/reports/rep-big').set({ authorUid: uid });
+    });
     const owner = testEnv.authenticatedContext(uid).storage();
-    const path = 'modes/prod/towns/greystones/apps/litter/reports/rep-photo/photo.jpg';
+    const path = 'modes/prod/towns/greystones/apps/litter/reports/rep-photo/photo';
     const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]);
     const meta = { ownerUid: uid, mode: 'prod', townId: 'greystones', appId: 'litter' };
     const put = (target: firebase.storage.Reference, data: Uint8Array, metadata: firebase.storage.UploadMetadata) =>
@@ -217,18 +222,118 @@ describe('firestore and storage rules', () => {
     await assertFails(testEnv.unauthenticatedContext().storage().ref(path).getMetadata());
     await assertFails(testEnv.authenticatedContext('other').storage().ref(path).getMetadata());
     await assertSucceeds(testEnv.authenticatedContext('admin-gs', { admin: { towns: ['greystones'] } }).storage().ref(path).getMetadata());
-    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-gif/photo.gif'), bytes, {
+    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-photo/photo.jpg'), bytes, {
+      contentType: 'image/jpeg',
+      customMetadata: meta,
+    }));
+    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-gif/photo'), bytes, {
       contentType: 'image/gif',
       customMetadata: meta,
     }));
-    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-mismatch/photo.jpg'), bytes, {
+    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-photo/photo'), bytes, {
       contentType: 'image/jpeg',
       customMetadata: { ownerUid: uid, mode: 'demo', townId: 'bray', appId: 'roads' },
     }));
+    await assertFails(put(owner.ref('modes/demo/towns/greystones/apps/litter/reports/rep-photo/photo'), bytes, {
+      contentType: 'image/jpeg',
+      customMetadata: { ownerUid: uid, mode: 'demo', townId: 'greystones', appId: 'litter' },
+    }));
     const oversized = new Uint8Array(5 * 1024 * 1024);
-    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-big/photo.jpg'), oversized, {
+    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-big/photo'), oversized, {
       contentType: 'image/jpeg',
       customMetadata: meta,
+    }));
+  });
+
+  it('rejects a demo write', async () => {
+    const uid = 'resident-demo';
+    const db = testEnv.authenticatedContext(uid).firestore();
+    await assertFails(createReport(
+      db,
+      uid,
+      'demo',
+      'greystones',
+      'litter',
+      'rep-demo-write',
+      reportBody(uid, { mode: 'demo' }),
+      { uid, count: 1, windowStart: stamp() },
+    ));
+    await assertFails(db.doc(`modes/demo/towns/greystones/apps/litter/rateLimits/${uid}`).set({
+      uid,
+      count: 1,
+      windowStart: stamp(),
+    }));
+  });
+
+  it('rejects an unknown town', async () => {
+    const uid = 'resident-bray';
+    const db = testEnv.authenticatedContext(uid).firestore();
+    await assertFails(createReport(
+      db,
+      uid,
+      'prod',
+      'bray',
+      'litter',
+      'rep-bray',
+      reportBody(uid, { townId: 'bray' }),
+      { uid, count: 1, windowStart: stamp() },
+    ));
+  });
+
+  it('rejects resetting the rate window to sneak 30 reports into one hour', async () => {
+    const uid = 'resident-bypass';
+    const db = testEnv.authenticatedContext(uid).firestore();
+    await assertSucceeds(createReport(
+      db,
+      uid,
+      'prod',
+      'greystones',
+      'litter',
+      'rep-bypass-1',
+      reportBody(uid),
+      { uid, count: 1, windowStart: stamp() },
+    ));
+    for (let n = 2; n <= 30; n += 1) {
+      await assertFails(createReport(
+        db,
+        uid,
+        'prod',
+        'greystones',
+        'litter',
+        `rep-bypass-${n}`,
+        reportBody(uid),
+        { uid, count: 1, windowStart: stamp() },
+      ));
+    }
+    const saved = await db.doc(`modes/prod/towns/greystones/apps/litter/rateLimits/${uid}`).get();
+    assert.equal(saved.data()?.count, 1);
+  });
+
+  it('rejects an orphan upload and a foreign upload', async () => {
+    const ownerUid = 'resident-owner';
+    const strangerUid = 'resident-stranger';
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await context.firestore().doc('modes/prod/towns/greystones/apps/litter/reports/rep-owned').set({
+        authorUid: ownerUid,
+      });
+    });
+    const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]);
+    const put = (target: firebase.storage.Reference, metadata: firebase.storage.UploadMetadata) =>
+      Promise.resolve(target.put(bytes, metadata));
+    const owner = testEnv.authenticatedContext(ownerUid).storage();
+    const stranger = testEnv.authenticatedContext(strangerUid).storage();
+    const ownerMeta = { ownerUid, mode: 'prod', townId: 'greystones', appId: 'litter' };
+    await assertFails(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-missing/photo'), {
+      contentType: 'image/jpeg',
+      customMetadata: ownerMeta,
+    }));
+    await assertFails(put(stranger.ref('modes/prod/towns/greystones/apps/litter/reports/rep-owned/photo'), {
+      contentType: 'image/jpeg',
+      customMetadata: { ownerUid: strangerUid, mode: 'prod', townId: 'greystones', appId: 'litter' },
+    }));
+    await assertSucceeds(put(owner.ref('modes/prod/towns/greystones/apps/litter/reports/rep-owned/photo'), {
+      contentType: 'image/jpeg',
+      customMetadata: ownerMeta,
     }));
   });
 });

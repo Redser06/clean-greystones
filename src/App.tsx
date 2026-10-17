@@ -7,7 +7,7 @@ import {
   INITIAL_PUBLIC_BINS,
   VERIFIED_CITATIONS,
 } from './data/greystonesData';
-import { countForEvidence } from './data/evidence';
+import { countForEvidence, deliverCouncillorEmail } from './data/evidence';
 import { isDemo } from './config/mode';
 import {
   EmailTemplateId,
@@ -315,13 +315,10 @@ export function App() {
     const ccEmails = COUNCIL_CC_CONTACTS.filter((c) =>
       selectedCcIds.includes(c.id)
     ).map((c) => c.email);
-
-    let evidenceCount: number;
-    try {
-      evidenceCount = countForEvidence(reports, submitterToken);
-    } catch {
-      evidenceCount = analysis.totalActiveReports;
-    }
+    const delivery = deliverCouncillorEmail(toEmails, ccEmails);
+    const evidenceCount = delivery.sendable
+      ? countForEvidence(reports, submitterToken, false)
+      : analysis.totalActiveReports;
 
     const topHotspot = analysis.nearBinHotspots[0]?.areaName ?? 'South Beach Promenade';
     const focusReport = selectedReport ?? lastLoggedReport ?? reports[0];
@@ -378,19 +375,20 @@ Kind regards,
 ${residentSignOff}
 (Anonymous Verification ID: ${submitterToken})`;
 
-    const mailtoHref = `mailto:${toEmails.join(',')}?cc=${encodeURIComponent(
-      ccEmails.join(',')
+    const mailtoHref = `mailto:${delivery.toEmails.join(',')}?cc=${encodeURIComponent(
+      delivery.ccEmails.join(',')
     )}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
     const gmailHref = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
-      toEmails.join(',')
-    )}&cc=${encodeURIComponent(ccEmails.join(','))}&su=${encodeURIComponent(
+      delivery.toEmails.join(',')
+    )}&cc=${encodeURIComponent(delivery.ccEmails.join(','))}&su=${encodeURIComponent(
       subject
     )}&body=${encodeURIComponent(body)}`;
 
     return {
-      toEmails,
-      ccEmails,
+      toEmails: delivery.toEmails,
+      ccEmails: delivery.ccEmails,
+      sample: delivery.sample,
       subject,
       body,
       mailtoHref,

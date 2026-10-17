@@ -5,6 +5,10 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    function isKnownTown(townId) {
+      return townId == 'greystones';
+    }
+
     function isTownAdmin(townId) {
       return signedIn()
         && request.auth.token.keys().hasAll(['admin'])
@@ -14,20 +18,28 @@ service firebase.storage {
         && townId in request.auth.token.admin.towns;
     }
 
+    function reportPath(mode, townId, appId, reportId) {
+      return /databases/(default)/documents/modes/$(mode)/towns/$(townId)/apps/$(appId)/reports/$(reportId);
+    }
+
     match /modes/{mode}/towns/{townId}/apps/{appId}/reports/{reportId}/{fileName} {
       allow read: if signedIn() && (
         resource.metadata.ownerUid == request.auth.uid
         || isTownAdmin(townId)
       );
       allow create: if signedIn()
-        && (mode == 'demo' || mode == 'prod')
+        && mode == 'prod'
+        && isKnownTown(townId)
         && (appId == 'litter' || appId == 'roads')
+        && fileName == 'photo'
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/(jpeg|png|webp)')
         && request.resource.metadata.ownerUid == request.auth.uid
         && request.resource.metadata.mode == mode
         && request.resource.metadata.townId == townId
-        && request.resource.metadata.appId == appId;
+        && request.resource.metadata.appId == appId
+        && firestore.exists(reportPath(mode, townId, appId, reportId))
+        && firestore.get(reportPath(mode, townId, appId, reportId)).data.authorUid == request.auth.uid;
       allow update, delete: if false;
     }
 

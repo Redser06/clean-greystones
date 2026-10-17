@@ -5,12 +5,14 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isMode(mode) {
-      return mode == 'demo' || mode == 'prod';
-    }
-
     function isApp(appId) {
       return appId == 'litter' || appId == 'roads';
+    }
+
+    // Town ids are allowlisted from data/towns. Rules cannot read that file.
+    // Adding a town means adding it here.
+    function isKnownTown(townId) {
+      return townId == 'greystones';
     }
 
     function isTownAdmin(townId) {
@@ -23,12 +25,12 @@ service cloud.firestore {
     }
 
     function scoped(data, mode, townId, appId) {
-      return isMode(mode)
+      return mode == 'prod'
+        && isKnownTown(townId)
         && isApp(appId)
         && data.mode == mode
         && data.townId == townId
-        && data.appId == appId
-        && data.townId.matches('^[a-z0-9]+(?:-[a-z0-9]+)*$');
+        && data.appId == appId;
     }
 
     function validReport(data, mode, townId, appId) {
@@ -58,19 +60,27 @@ service cloud.firestore {
       return /databases/$(database)/documents/modes/$(mode)/towns/$(townId)/apps/$(appId)/rateLimits/$(request.auth.uid);
     }
 
+    function rateShape(data, uid) {
+      return data.uid == uid
+        && data.count is int
+        && data.windowStart is timestamp
+        && data.keys().hasOnly(['uid', 'count', 'windowStart']);
+    }
+
     function rateAllows(mode, townId, appId) {
       let path = ratePath(mode, townId, appId);
       let after = getAfter(path);
-      let fresh = !exists(path) || get(path).data.windowStart < request.time - duration.value(1, 'h');
-      return after.data.uid == request.auth.uid
-        && after.data.count is int
-        && after.data.count >= 1
-        && after.data.count <= 8
-        && after.data.windowStart is timestamp
+      let existed = exists(path);
+      let fresh = !existed || request.time >= get(path).data.windowStart + duration.value(1, 'h');
+      return mode == 'prod'
+        && isKnownTown(townId)
+        && isApp(appId)
+        && rateShape(after.data, request.auth.uid)
         && (
           (fresh && after.data.count == 1 && after.data.windowStart == request.time)
           || (!fresh
             && after.data.count == get(path).data.count + 1
+            && after.data.count <= 8
             && after.data.windowStart == get(path).data.windowStart)
         );
     }
@@ -81,6 +91,7 @@ service cloud.firestore {
         || isTownAdmin(townId)
       );
       allow create: if signedIn()
+        && mode == 'prod'
         && validReport(request.resource.data, mode, townId, appId)
         && rateAllows(mode, townId, appId);
       allow update, delete: if false;
@@ -93,14 +104,34 @@ service cloud.firestore {
 
     match /modes/{mode}/towns/{townId}/apps/{appId}/rateLimits/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
-      allow create, update: if signedIn()
+      allow create: if signedIn()
+        && mode == 'prod'
+        && isKnownTown(townId)
+        && isApp(appId)
         && request.auth.uid == uid
-        && request.resource.data.uid == uid
-        && request.resource.data.count is int
-        && request.resource.data.count >= 1
-        && request.resource.data.count <= 8
-        && request.resource.data.windowStart is timestamp
-        && request.resource.data.keys().hasOnly(['uid', 'count', 'windowStart']);
+        && rateShape(request.resource.data, uid)
+        && request.resource.data.count == 1
+        && request.resource.data.windowStart == request.time;
+      allow update: if signedIn()
+        && mode == 'prod'
+        && isKnownTown(townId)
+        && isApp(appId)
+        && request.auth.uid == uid
+        && rateShape(request.resource.data, uid)
+        && rateShape(resource.data, uid)
+        && (
+          (
+            request.resource.data.count == resource.data.count + 1
+            && request.resource.data.count <= 8
+            && request.resource.data.windowStart == resource.data.windowStart
+          )
+          || (
+            request.time >= resource.data.windowStart + duration.value(1, 'h')
+            && request.resource.data.count == 1
+            && request.resource.data.windowStart == request.time
+          )
+        );
+      allow delete: if false;
     }
 
     match /{document=**} {

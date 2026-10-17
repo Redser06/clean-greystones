@@ -1,7 +1,7 @@
 {
   "id": "greystones",
   "townId": "greystones",
-  "firebaseProject": "rapid-prototyping-4134c",
+  "firebaseProject": "greystones-civic",
   "hosting": {
     "clean": {
       "demo": "clean-greystones-demo",

@@ -36,10 +36,8 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   const hostStream: CivicAppStream = useMemo(() => {
     if (defaultAppFilter && defaultAppFilter !== 'all') return defaultAppFilter;
     if (liveReports.length > 0) return inferReportAppStream(liveReports[0]);
-    if (typeof window !== 'undefined' && window.location.hostname.includes('roads')) {
-      return 'greystones_roads';
-    }
-    return 'clean_greystones';
+    const clean = town.apps.find((app) => app.key === 'clean');
+    return clean?.id === 'roads' ? 'greystones_roads' : 'clean_greystones';
   }, [defaultAppFilter, liveReports]);
 
   const [appFilter, setAppFilter] = useState<AppStreamFilter>(() => {

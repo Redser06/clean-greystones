@@ -1,5 +1,12 @@
 name: Deploy
 
+# Production hosting uses GitHub Environment "prod".
+# Conor creates that environment, limits it to main, adds a required reviewer,
+# and stores the prod service account there. Pull-request jobs never reference it.
+# Demo previews use a separate demo service account and greystones-civic-demo.
+# This workflow deploys hosting only. It does not deploy Firestore or Storage rules.
+# It does not deploy roads-prod. Potholes hosting is room only.
+
 on:
   workflow_run:
     workflows: [CI]
@@ -17,6 +24,7 @@ jobs:
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
+    environment: prod
     steps:
       - name: Checkout
         if: ${{ !cancelled() }}
@@ -37,9 +45,15 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           CIVIC_HOSTING_TARGET: prod
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
         run: |
           if [ -z "${FIREBASE_SERVICE_ACCOUNT}" ]; then
-            echo "SKIP deploy: FIREBASE_SERVICE_ACCOUNT secret is absent."
+            echo "SKIP deploy: prod environment secret is absent. Create GitHub Environment prod before deploying."
             exit 0
           fi
           if [ "${VITE_DEMO}" = "true" ]; then
@@ -47,12 +61,12 @@ jobs:
             exit 1
           fi
           unset VITE_DEMO
-          echo "CI is green on ${{ github.event.workflow_run.head_sha }}. Deploying prod hosting targets only."
+          echo "CI is green on ${{ github.event.workflow_run.head_sha }}. Deploying clean-prod hosting only to greystones-civic."
           npm ci
           npm run build
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
-          npx firebase deploy --only hosting:clean-prod,hosting:roads-prod --project rapid-prototyping-4134c --non-interactive
+          npx firebase deploy --only hosting:clean-prod --project greystones-civic --non-interactive
 
   deploy-demo-preview:
     if: github.event_name == 'pull_request'
@@ -74,17 +88,17 @@ jobs:
       - name: Demo preview channel
         if: ${{ !cancelled() }}
         env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_DEMO_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_DEMO_SERVICE_ACCOUNT }}
           CIVIC_HOSTING_TARGET: demo
           VITE_DEMO: 'true'
         run: |
-          if [ -z "${FIREBASE_SERVICE_ACCOUNT}" ]; then
-            echo "SKIP deploy: FIREBASE_SERVICE_ACCOUNT secret is absent."
+          if [ -z "${FIREBASE_DEMO_SERVICE_ACCOUNT}" ]; then
+            echo "SKIP deploy: FIREBASE_DEMO_SERVICE_ACCOUNT secret is absent."
             exit 0
           fi
-          echo "PR preview deploys only to the clean-demo hosting target."
+          echo "PR preview deploys only to the clean-demo hosting target on greystones-civic-demo."
           npm ci
           npm run build -- --mode demo
-          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
+          printf '%s' "$FIREBASE_DEMO_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
-          npx firebase hosting:channel:deploy "pr-${{ github.event.pull_request.number }}" --only clean-demo --expires 7d --project rapid-prototyping-4134c --non-interactive
+          npx firebase hosting:channel:deploy "pr-${{ github.event.pull_request.number }}" --only clean-demo --expires 7d --project greystones-civic-demo --non-interactive

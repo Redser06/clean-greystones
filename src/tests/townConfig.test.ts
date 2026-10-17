@@ -30,7 +30,7 @@ describe('town config', () => {
     const town = loadGreystones();
     assert.equal(town.id, 'greystones');
     assert.equal(town.townId, 'greystones');
-    assert.equal(town.firebaseProject, 'rapid-prototyping-4134c');
+    assert.equal(town.firebaseProject, 'greystones-civic');
     assert.equal(town.hosting.clean.prod, 'clean-greystones');
     assert.equal(town.hosting.clean.demo, 'clean-greystones-demo');
     assert.equal(town.hosting.potholes.prod, 'greystones-roads');

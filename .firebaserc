@@ -1,13 +1,19 @@
 {
   "projects": {
-    "default": "rapid-prototyping-4134c"
+    "default": "greystones-civic",
+    "prod": "greystones-civic",
+    "demo": "greystones-civic-demo"
   },
   "targets": {
-    "rapid-prototyping-4134c": {
+    "greystones-civic": {
       "hosting": {
         "clean-prod": ["clean-greystones"],
+        "roads-prod": ["greystones-roads"]
+      }
+    },
+    "greystones-civic-demo": {
+      "hosting": {
         "clean-demo": ["clean-greystones-demo"],
-        "roads-prod": ["greystones-roads"],
         "roads-demo": ["greystones-roads-demo"]
       }
     }

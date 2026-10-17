@@ -68,5 +68,11 @@ describe('production bundle guard', () => {
     for (const id of ids) {
       assert.equal(bundled.includes(id), false, id);
     }
+    const assets = readdirSync(join(root, 'dist/assets'));
+    const appChunks = assets.filter((name) => /^App-.*\.js$/.test(name));
+    assert.equal(appChunks.length, 1);
+    const appChunk = readFileSync(join(root, 'dist/assets', appChunks[0]), 'utf8');
+    assert.equal(appChunk.includes('identitytoolkit.googleapis.com'), false);
+    assert.equal(appChunk.includes('firebasestorage.googleapis.com'), false);
   });
 });
