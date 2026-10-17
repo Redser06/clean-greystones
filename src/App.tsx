@@ -256,7 +256,7 @@ export function App() {
       introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${analysis.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
     } else if (selectedTemplateId === 'wheel_contamination') {
       subject = `Footpath Accessibility Hazard: ${analysis.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
-      introParagraph = `Residents have logged ${analysis.totalActiveReports} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs (♿), ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations (👶), and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits (👟).`;
+      introParagraph = `Residents have logged ${analysis.totalActiveReports} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
     } else if (selectedTemplateId === 'request_bin') {
       subject = `Request for Dog-Waste Bins on Unserved Greystones Walking Routes (>200m from any bin)`;
       introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit shows 0 dedicated dog-waste bins in the town and >200m bin gaps on outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
@@ -265,7 +265,7 @@ export function App() {
     const latestFocusBlock = focusReport
       ? `Logged Incident Reference (${focusReport.id.toUpperCase()} · Submitter ${focusReport.submitterToken}):
 • Location: ${focusReport.streetName} (${focusReport.lat.toFixed(4)}° N, ${Math.abs(focusReport.lng).toFixed(4)}° W)
-• Impact: ${SEVERITY_META[focusReport.severity].emoji} ${SEVERITY_META[focusReport.severity].label}
+• Impact: ${SEVERITY_META[focusReport.severity].label}
 • Distance to Nearest Public Bin: ${focusReport.dBinAllM} metres (${focusReport.nearestBinCode})${
           focusReport.note ? `\n• Note: "${focusReport.note}"` : ''
         }`
@@ -282,7 +282,7 @@ ${introParagraph}
 SUMMARY OF MAPPED GREYSTONES EVIDENCE:
 • Active Geo-Tagged Reports: ${analysis.totalActiveReports} incidents across ${analysis.distinctSubmitters} distinct anonymous resident tokens
 • Bin Proximity (Background Audit): ${analysis.nearBin15mPct}% (${analysis.nearBin15mCount} reports) are within 15m of a bin; ${analysis.nearBin50mPct}% are within 50m of a bin.
-• Direct Wheel & Shoe Impact: ${analysis.highImpactCount} incidents (${analysis.highImpactPct}%) involved wheelchair wheels (♿ ${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (👶 ${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (👟 ${analysis.bySeverity.stepped_in.count}).
+• Direct Wheel & Shoe Impact: ${analysis.highImpactCount} incidents (${analysis.highImpactPct}%) involved wheelchair wheels (${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (${analysis.bySeverity.stepped_in.count}).
 • Primary Hotspot Beside Bins: ${topHotspot}
 • Unserved Outer Routes (>200m from a bin): Kindlestown Woods, Charlesland Spine Path, and Cliff Walk Start (${analysis.gt200mCount} reports).
 
