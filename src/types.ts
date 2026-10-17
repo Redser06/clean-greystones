@@ -1,112 +1,24 @@
-export type SeverityType = 'just_poop' | 'stepped_in' | 'buggy_wheels' | 'wheelchair_wheels';
+export type Impact = 'on_the_path' | 'stepped_in' | 'buggy' | 'wheelchair';
 
-export type ReportStatus = 'spotted' | 'cleared' | 'stale' | 'pending' | 'merged';
-
-export interface FoulingReport {
+export interface Report {
   id: string;
-  createdAt: string; // ISO
+  createdAt: string;
   lat: number;
   lng: number;
-  accuracyM: number;
-  streetName: string;
-  areaName: string;
-  h3Cell: string;
-  severity: SeverityType;
-  status: ReportStatus;
-  confirmations: number;
-  note?: string;
-  reporterInitials: string;
-  nearestBinId: string;
-  nearestBinCode: string;
-  dBinAllM: number;
-  dBinVerifiedM: number;
-  hasPhoto?: boolean;
-  photoCaption?: string;
-  clearedAt?: string;
+  impact: Impact | null;
+  hasPhoto: boolean;
 }
 
-export type BinKind = 'general' | 'dog_waste' | 'bag_dispenser' | 'recycling';
-export type BinSource = 'osm' | 'crowd' | 'council';
-export type BinStatus = 'unverified' | 'verified' | 'disputed' | 'removed';
-
-export interface PublicBin {
+export interface LitterBin {
   id: string;
-  code: string;
-  osmId?: string;
   lat: number;
   lng: number;
-  locationName: string;
-  kind: BinKind;
-  source: BinSource;
-  status: BinStatus;
-  yesVotes: number;
-  noVotes: number;
-  lastConfirmedAt: string;
-  capacityStatus?: 'EMPTY' | 'SERVICED' | 'OVERFLOWING';
 }
+
+export type ToneId = 'factual' | 'patrols' | 'bins';
 
 export interface Councillor {
   id: string;
   name: string;
-  initials: string;
-  party: string;
-  district: string;
-  roleNote: string;
   email: string;
-  motionsRaised: number;
-  motionsCarried: number;
-  latestMotion: string;
-  followUpNote: string;
-  isDefaultSelected: boolean;
-}
-
-export interface LegalCitation {
-  id: string;
-  code: string;
-  title: string;
-  quote: string;
-  sourceUrl: string;
-  status: 'verified' | 'unverified';
-  verifiedAt: string;
-  tags: ('always' | 'beach' | 'park' | 'bin_request' | 'enforcement')[];
-}
-
-export interface HansardRecord {
-  id: string;
-  body: 'Greystones MD' | 'Wicklow Plenary';
-  date: string;
-  statusLabel: string;
-  statusTone: 'error' | 'success' | 'neutral';
-  statusEmoji: string;
-  title: string;
-  summary: string;
-  quoteHeader: string;
-  quoteText: string;
-  footerMeta: string;
-  pdfUrl: string;
-}
-
-export type EmailTemplateId =
-  | 'hotspot_evidence'
-  | 'bin_mythbuster'
-  | 'wheel_contamination'
-  | 'request_bin'
-  | 'follow_up_accountability';
-
-export interface EmailTemplateOption {
-  id: EmailTemplateId;
-  label: string;
-  shortDesc: string;
-  intent: 'enforcement' | 'bin_request' | 'general';
-}
-
-export interface GraphRunSummary {
-  runId: string;
-  reportId: string;
-  timestamp: string;
-  n1Validate: { ok: boolean; reason: string };
-  n4Dedupe: { action: 'new' | 'confirm' | 'merge'; targetId?: string; distanceM?: number };
-  n5Snap: { snapped: boolean; street: string };
-  n6BinDist: { nearestBinCode: string; distanceM: number; isNearBinMythbuster: boolean; promptType: 'confirm_bin' | 'survey_cell' | 'none' };
-  n7Commit: { status: ReportStatus };
 }
