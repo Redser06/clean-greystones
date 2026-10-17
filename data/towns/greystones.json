@@ -1,0 +1,92 @@
+{
+  "id": "greystones",
+  "name": "Greystones",
+  "region": "Co. Wicklow",
+  "timeZone": "Europe/Dublin",
+  "storageKey": "clean-greystones.reports.v1",
+  "exportSlug": "greystones-dog-fouling",
+  "map": {
+    "centre": { "lat": 53.1443, "lng": -6.0632 },
+    "bounds": { "south": 53.12, "west": -6.11, "north": 53.175, "east": -6.04 },
+    "reportZoom": 15,
+    "pictureZoom": 13
+  },
+  "branding": {
+    "name": "Clean Greystones",
+    "tagline": "Report dog fouling in Greystones",
+    "description": "Report dog fouling in Greystones, see how many reports were logged this month, and write to your councillors.",
+    "primaryColour": "#006948",
+    "logo": "/towns/greystones.svg"
+  },
+  "councillors": [
+    { "id": "cllr-stokes", "name": "Cllr Stephen Stokes", "email": "sstokes@wicklowcoco.ie" },
+    { "id": "cllr-scott", "name": "Cllr Lourda Scott", "email": "lscott@wicklowcoco.ie" },
+    { "id": "cllr-finn", "name": "Cllr Orla Finn", "email": "ofinn@wicklowcoco.ie" },
+    { "id": "cllr-fortune", "name": "Cllr Tom Fortune", "email": "tfortune@wicklowcoco.ie" },
+    { "id": "cllr-gaskin", "name": "Cllr Louise Fenelon Gaskin", "email": "lfenelongaskin@wicklowcoco.ie" },
+    { "id": "cllr-barry", "name": "Cllr Mark Barry", "email": "mbarry@wicklowcoco.ie" }
+  ],
+  "councilContacts": [
+    {
+      "id": "environment-office",
+      "name": "Environment office",
+      "email": "envcomplaints@wicklowcoco.ie",
+      "defaultCc": true
+    },
+    {
+      "id": "litter-line",
+      "name": "Council litter line",
+      "phone": "1800 365 123",
+      "phoneLabel": "Council litter line",
+      "defaultCc": false
+    }
+  ],
+  "legal": {
+    "offence": "Leaving dog faeces on a public road, footpath, beach or park is an offence under section 22 of the Litter Pollution Act 1997.",
+    "citationLabel": "Litter Pollution Act 1997, section 22",
+    "citationUrl": "https://www.irishstatutebook.ie/eli/1997/act/12/section/22/enacted/en/html",
+    "fineWording": "It may result in a fixed penalty.",
+    "fixedPaymentNote": "A Department notice on section 36 of the Circular Economy and Miscellaneous Provisions Act 2022 (commenced 1 September 2026) describes fixed payments for littering generally. It is not a verified dog-fouling penalty amount.",
+    "fixedPaymentUrl": "https://www.gov.ie/en/department-of-climate-energy-and-the-environment/press-releases/minister-dillon-welcomes-commencement-of-increased-litter-fines/",
+    "fixedPaymentLabel": "Department notice, 1 September 2026"
+  },
+  "email": {
+    "greeting": "Dear councillors,",
+    "intro": "I am a resident of Greystones, Co. Wicklow. I am writing about dog fouling on footpaths, the seafront and other public places.",
+    "signOffFallback": "A Greystones resident",
+    "templates": [
+      {
+        "id": "factual",
+        "label": "A factual note",
+        "description": "Share the reports logged this month and ask for them to be noted.",
+        "subject": "Dog fouling reports in Greystones",
+        "ask": "I would be grateful if these reports could be noted at the next Greystones Municipal District meeting."
+      },
+      {
+        "id": "patrols",
+        "label": "A request for patrols",
+        "description": "Ask for attention on busy footpaths and the seafront.",
+        "subject": "Request for patrols in Greystones",
+        "ask": "I would be grateful if litter patrols could include the seafront, Church Road and other busy footpaths, especially on weekend mornings."
+      },
+      {
+        "id": "bins",
+        "label": "A request for bins",
+        "description": "Ask the council to look at bins on walking routes.",
+        "subject": "Request for bins on Greystones walking routes",
+        "ask": "I would be grateful if the council could review litter bins on walking routes in Greystones."
+      }
+    ]
+  },
+  "act": {
+    "intro": "Write to the six Greystones Municipal District councillors. Nothing is sent until you send it from your own email app."
+  },
+  "litterBinsFile": "data/bins/greystones.geojson",
+  "binsNote": "Distances use OpenStreetMap litter bins (amenity waste basket) from the 16 October 2026 snapshot. Recycling bring-banks are excluded. This is a comparison of reported spots with mapped bins, not a finding about why people did not use a bin.",
+  "demoReports": [
+    { "id": "demo-beach", "lat": 53.14431, "lng": -6.06047, "day": 4, "monthOffset": 0 },
+    { "id": "demo-church", "lat": 53.14527, "lng": -6.0639, "day": 9, "monthOffset": 0 },
+    { "id": "demo-harbour", "lat": 53.1489, "lng": -6.0634, "day": 14, "monthOffset": 0 },
+    { "id": "demo-last-month", "lat": 53.1422, "lng": -6.0594, "day": 11, "monthOffset": -1 }
+  ]
+}
