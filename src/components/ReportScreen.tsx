@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Baby, Accessibility, Camera, Footprints, MapPin, Route } from 'lucide-react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Baby, Accessibility, Footprints, MapPin, Route } from 'lucide-react';
 import { town } from '../config/town';
 import type { Impact, Report } from '../types';
-import { createReport, moveReport, withImpact, withPhoto } from '../lib/reportFlow';
+import { createReport, moveReport, withImpact } from '../lib/reportFlow';
 import { MapView, type MapPoint } from './MapView';
 
 const IMPACTS: { id: Impact; label: string; Icon: typeof MapPin }[] = [
@@ -30,17 +30,21 @@ async function currentLocation(): Promise<{ lat: number; lng: number } | null> {
 
 export function ReportScreen({ reports, onChange }: ReportScreenProps) {
   const [impact, setImpact] = useState<Impact | null>(null);
-  const [photoReady, setPhotoReady] = useState(false);
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ id: string; hint: string } | null>(null);
   const [focus, setFocus] = useState<{ lat: number; lng: number; nonce: string } | null>(null);
+  const [attributionInset, setAttributionInset] = useState(200);
+  const sheetRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    return () => {
-      if (photoUrl) URL.revokeObjectURL(photoUrl);
-    };
-  }, [photoUrl]);
+  useLayoutEffect(() => {
+    const element = sheetRef.current;
+    if (!element) return;
+    const update = () => setAttributionInset(Math.ceil(element.getBoundingClientRect().height) + 8);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const points = useMemo<MapPoint[]>(
     () =>
@@ -67,7 +71,6 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
       lat: point.lat,
       lng: point.lng,
       impact,
-      hasPhoto: photoReady,
     });
     onChange([report, ...reports]);
     setToast({
@@ -82,16 +85,6 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
     const value = impact === next ? null : next;
     setImpact(value);
     if (toast) update(toast.id, (report) => withImpact(report, value));
-  }
-
-  function onPhotoSelected(file: File | undefined) {
-    if (!file || !file.type.startsWith('image/')) return;
-    setPhotoUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return URL.createObjectURL(file);
-    });
-    setPhotoReady(true);
-    if (toast) update(toast.id, (report) => withPhoto(report, true));
   }
 
   function undo() {
@@ -111,7 +104,7 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
         colour={town.branding.primaryColour}
         label={`Map of ${town.name}`}
         focus={focus}
-        attributionInset={176}
+        attributionInset={attributionInset}
         onMovePoint={(id, lat, lng) => update(id, (report) => moveReport(report, lat, lng))}
       />
 
@@ -131,7 +124,11 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] bg-gradient-to-t from-white via-white to-white/0 px-3 pb-3 pt-10">
+      <div
+        ref={sheetRef}
+        data-testid="report-sheet"
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] bg-gradient-to-t from-white via-white to-white/0 px-3 pb-3 pt-10"
+      >
         <div className="pointer-events-auto mx-auto flex max-w-md flex-col gap-2">
           <div role="group" aria-label="Impact, optional" className="flex flex-wrap gap-2">
             {IMPACTS.map(({ id, label, Icon }) => {
@@ -142,7 +139,7 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
                   type="button"
                   aria-pressed={selected}
                   onClick={() => chooseImpact(id)}
-                  className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm font-medium ${
+                  className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm font-medium ${
                     selected
                       ? 'border-primary bg-primary text-white'
                       : 'border-line bg-white text-ink'
@@ -153,28 +150,6 @@ export function ReportScreen({ reports, onChange }: ReportScreenProps) {
                 </button>
               );
             })}
-          </div>
-
-          <div className="flex items-center gap-3">
-            <input
-              id="report-photo"
-              name="report-photo"
-              type="file"
-              accept="image/*"
-              className="sr-only"
-              onChange={(event) => onPhotoSelected(event.target.files?.[0])}
-            />
-            <label
-              htmlFor="report-photo"
-              className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border border-line bg-white px-3 text-sm font-medium text-ink"
-            >
-              <Camera aria-hidden="true" size={16} />
-              {photoReady ? 'Photo added' : 'Add a photo'}
-              <span className="font-normal text-muted">(optional)</span>
-            </label>
-            {photoUrl && (
-              <img src={photoUrl} alt="Photo added for this report" className="h-10 w-10 rounded-lg object-cover" />
-            )}
           </div>
 
           <button

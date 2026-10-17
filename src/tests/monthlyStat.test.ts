@@ -16,7 +16,7 @@ describe('monthly report stat', () => {
       now,
     );
     assert.deepEqual(stat, { thisMonth: 2, lastMonth: 1, delta: 1 });
-    assert.equal(headlineStat(stat), '2 reports this month');
+    assert.equal(headlineStat(stat), "You've logged 2 reports this month");
     assert.equal(trendSentence(stat), '1 more report than last month');
   });
 
@@ -27,11 +27,11 @@ describe('monthly report stat', () => {
     );
     assert.equal(down.delta, -2);
     assert.equal(trendSentence(down), '2 fewer reports than last month');
-    assert.equal(headlineStat(down), '0 reports this month');
+    assert.equal(headlineStat(down), "You've logged 0 reports this month");
 
     const flat = monthlyReportStat([], now);
     assert.deepEqual(flat, { thisMonth: 0, lastMonth: 0, delta: 0 });
-    assert.equal(trendSentence(flat), 'No reports last month either');
+    assert.equal(trendSentence(flat), 'You logged none last month either');
 
     const same = monthlyReportStat(
       [{ createdAt: '2026-10-02T12:00:00Z' }, { createdAt: '2026-09-02T12:00:00Z' }],
@@ -42,7 +42,7 @@ describe('monthly report stat', () => {
 
   it('uses a singular noun for one report', () => {
     const stat = monthlyReportStat([{ createdAt: '2026-10-01T00:30:00Z' }], now);
-    assert.equal(headlineStat(stat), '1 report this month');
+    assert.equal(headlineStat(stat), "You've logged 1 report this month");
   });
 
   it('uses Irish civil time for the month boundary', () => {

@@ -1,14 +1,31 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
-import { applyTownBranding } from './config/branding';
-import { town } from './config/town';
+import { BootError, townLoadErrorText } from './components/BootError';
 import './index.css';
 
-applyTownBranding(town);
+const root = document.getElementById('root');
+if (!root) throw new Error('Missing #root');
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+void boot(root);
+
+async function boot(element: HTMLElement) {
+  try {
+    const [{ town }, { applyTownBranding }, { default: App }] = await Promise.all([
+      import('./config/town'),
+      import('./config/branding'),
+      import('./App'),
+    ]);
+    applyTownBranding(town);
+    ReactDOM.createRoot(element).render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>,
+    );
+  } catch (error) {
+    ReactDOM.createRoot(element).render(
+      <React.StrictMode>
+        <BootError message={townLoadErrorText(error)} />
+      </React.StrictMode>,
+    );
+  }
+}

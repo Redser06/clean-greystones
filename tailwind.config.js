@@ -11,8 +11,8 @@ export default {
         canvas: '#f3f6f4',
       },
       fontFamily: {
-        display: ['Plus Jakarta Sans', 'sans-serif'],
-        sans: ['Inter', 'sans-serif'],
+        display: ['ui-sans-serif', 'system-ui', 'Segoe UI', 'Helvetica Neue', 'Arial', 'sans-serif'],
+        sans: ['ui-sans-serif', 'system-ui', 'Segoe UI', 'Helvetica Neue', 'Arial', 'sans-serif'],
       },
     },
   },

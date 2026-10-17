@@ -39,10 +39,10 @@ export function AdminPage() {
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl bg-canvas px-4 py-6 text-ink">
-      <p className="text-sm font-medium text-primary">Admin export</p>
+      <p className="text-sm font-medium text-primary">Local export</p>
       <h1 className="mt-1 font-display text-2xl font-semibold">Council report</h1>
       <p className="mt-2 text-sm leading-relaxed text-muted">
-        Bin distances stay here. This page is not linked from the resident app.
+        Bin distances stay here. This page runs in your browser. It is not a secured admin area, and the resident app does not link to it.
       </p>
 
       <section className="mt-6 space-y-2 rounded-2xl border border-line bg-white p-4" aria-labelledby="admin-reports">

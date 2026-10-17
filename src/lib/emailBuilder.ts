@@ -1,5 +1,5 @@
 import type { EmailTemplate, TownConfig } from '../config/schema';
-import { trendClause, type MonthStat } from './monthlyStat';
+import { headlineStat, trendClause, type MonthStat } from './monthlyStat';
 
 export interface EmailDraft {
   to: string[];
@@ -16,10 +16,6 @@ export function cleanSignOff(value: string, fallback: string): string {
   return cleaned || fallback;
 }
 
-export function reportNoun(count: number): string {
-  return count === 1 ? '1 report' : `${count} reports`;
-}
-
 export function buildEmailBody(
   config: Pick<TownConfig, 'email' | 'legal'>,
   tone: EmailTemplate,
@@ -31,7 +27,7 @@ export function buildEmailBody(
     '',
     config.email.intro,
     '',
-    `Residents have logged ${reportNoun(stat.thisMonth)} this month, ${trendClause(stat)}.`,
+    `${headlineStat(stat)}, ${trendClause(stat)}.`,
     '',
     tone.ask,
     '',

@@ -51,7 +51,8 @@ describe('email builder', () => {
     assert.match(draft.mailto, /subject=Request%20for%20patrols%20in%20Greystones/);
     const body = decodeBody(draft.mailto);
     assert.equal(body, draft.body);
-    assert.match(body, /4 reports this month, 2 more than last month/);
+    assert.match(body, /You've logged 4 reports this month, 2 more than last month/);
+    assert.doesNotMatch(body, /Residents have logged|town-wide/);
     assert.match(body, new RegExp(town.legal.citationUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(body, /may result in a fixed penalty/);
     assert.match(body, /Kind regards,\nAlex/);

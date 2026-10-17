@@ -1,16 +1,16 @@
 # Clean Greystones
 
-A small civic app for Greystones, Co. Wicklow. Residents can report dog fouling, see how many reports were logged this month, and write to their councillors.
+A small civic app for Greystones, Co. Wicklow. Residents can report dog fouling, see how many reports they have logged on this device this month, and write to their councillors. Counts stay on the device until a shared backend exists.
 
 The app does not send email. It opens the resident's own mail app, or copies the message.
 
 ## Resident jobs
 
-1. **Report.** A full-screen map and one button, Report this spot. The pin drops at the current location and can be dragged. A photo and an impact chip are optional.
-2. **Picture.** One figure: reports this month, and how that compares with last month, on a cluster map.
-3. **Act.** Tell your councillors opens a short note with three polite tones. The six Greystones Municipal District councillors are selected already.
+1. **Report.** A full-screen map and one button, Report this spot. The pin drops at the current location and can be dragged. An impact chip is optional. Photos are not collected.
+2. **Picture.** One figure: reports you have logged this month, and how that compares with last month, on a cluster map.
+3. **Act.** Tell your councillors opens a short note with three polite tones. The six Greystones Municipal District councillors are selected already. The note says what you have logged on this device. It does not claim a town-wide total.
 
-Bin markers, bin voting and the long stats pages are not in the resident app. Distance to litter bins is calculated in `src/lib/binDistance.ts` and shown only at `/admin`, which the resident screens do not link to.
+Bin markers, bin voting and the long stats pages are not in the resident app. Distance to litter bins is calculated in `src/lib/binDistance.ts` and shown only at `/admin`. That route is an unlinked client-side analysis and export view. It is not a secured admin area.
 
 ## Map tiles
 
@@ -20,7 +20,7 @@ Set `VITE_GOOGLE_MAPS_API_KEY` at build time if you want Google Streets. Vite re
 
 ## Law
 
-The offence cited in the email is section 22 of the Litter Pollution Act 1997. The fixed penalty is described as something that may result, without treating a euro amount as a verified dog-fouling fine. The September 2026 Department notice on section 36 of the Circular Economy and Miscellaneous Provisions Act 2022 is about littering fixed payments generally, and the admin export says so.
+The offence cited in the email is section 22 of the Litter Pollution Act 1997. The fixed penalty is described as something that may result, without treating a euro amount as a verified dog-fouling fine. The September 2026 Department notice on section 36 of the Circular Economy and Miscellaneous Provisions Act 2022 is about littering fixed payments generally, and the export on `/admin` says so.
 
 ## Scripts
 

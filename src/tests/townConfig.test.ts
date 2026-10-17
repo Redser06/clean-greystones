@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { BootError } from '../components/BootError';
+import { assertTownBuild } from '../config/loadTowns';
 import { buildDemoReports } from '../lib/reportFlow';
 import {
   binSourceForTown,
@@ -83,6 +87,8 @@ describe('town config', () => {
     const available = { '../../data/towns/greystones.json': loadGreystones() };
     assert.equal(selectTown('greystones', available).name, 'Greystones');
     assert.throws(() => selectTown('bray', available), /Unknown town "bray"/);
+    assert.equal(assertTownBuild(root, undefined).id, 'greystones');
+    assert.throws(() => assertTownBuild(root, 'bray'), /VITE_TOWN=bray cannot be built/);
 
     const raw = binSourceForTown('data/bins/greystones.geojson', {
       '../../data/bins/greystones.geojson': '{"type":"FeatureCollection","features":[]}',
@@ -116,5 +122,34 @@ describe('town config', () => {
     const gitignore = readFileSync(join(root, '.gitignore'), 'utf8');
     assert.match(gitignore, /^\.env\*$/m);
     assert.match(gitignore, /^!\.env\.example$/m);
+  });
+
+  it('shows a readable screen when a town cannot be loaded', () => {
+    const html = renderToStaticMarkup(
+      createElement(BootError, { message: 'Unknown town "nope". Configured towns: greystones.' }),
+    );
+    assert.match(html, /This build could not load a town/);
+    assert.match(html, /Unknown town/);
+    assert.match(html, /nope/);
+    assert.match(html, /VITE_TOWN/);
+  });
+
+  it('does not request web fonts or offer a photo that is not stored', () => {
+    const files = [join(root, 'index.html')];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const path = join(dir, entry);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.(tsx|ts|css|html)$/.test(entry)) files.push(path);
+      }
+    };
+    walk(join(root, 'src/components'));
+    walk(join(root, 'src/lib'));
+    walk(join(root, 'src/config'));
+    files.push(join(root, 'src/index.css'), join(root, 'src/main.tsx'), join(root, 'src/App.tsx'));
+    const source = files.map((file) => readFileSync(file, 'utf8')).join('\n');
+    for (const phrase of ['fonts.googleapis.com', 'fonts.gstatic.com', 'report-photo', 'Add a photo']) {
+      assert.equal(source.includes(phrase), false, phrase);
+    }
   });
 });

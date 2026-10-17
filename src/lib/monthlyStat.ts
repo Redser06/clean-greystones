@@ -43,13 +43,14 @@ export function monthlyReportStat(
   return { thisMonth, lastMonth, delta: thisMonth - lastMonth };
 }
 
+/** Counts on this device only. There is no shared town total yet. */
 export function headlineStat(stat: MonthStat): string {
   const noun = stat.thisMonth === 1 ? 'report' : 'reports';
-  return `${stat.thisMonth} ${noun} this month`;
+  return `You've logged ${stat.thisMonth} ${noun} this month`;
 }
 
 export function trendSentence(stat: MonthStat): string {
-  if (stat.thisMonth === 0 && stat.lastMonth === 0) return 'No reports last month either';
+  if (stat.thisMonth === 0 && stat.lastMonth === 0) return 'You logged none last month either';
   if (stat.delta > 0) {
     const noun = stat.delta === 1 ? 'report' : 'reports';
     return `${stat.delta} more ${noun} than last month`;
