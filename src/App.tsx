@@ -9,10 +9,14 @@ import {
   VERIFIED_CITATIONS,
 } from './data/greystonesData';
 import {
+  CivicActionEvent,
+  CivicEventType,
   EmailTemplateId,
   FoulingReport,
+  MapTimeRange,
   PublicBin,
   SeverityType,
+  WeeklyEvidenceSummary,
 } from './types';
 import {
   SEVERITY_META,
@@ -34,10 +38,24 @@ import {
   incrementConfirmationInCloud,
   clearReportsFromCloud,
   seedDemoReportsToCloud,
+  mergeReportInCloud,
+  saveDailySnapshotToCloud,
+  fetchLiveReportsFromCloud,
+  logCivicEventToCloud,
+  subscribeToCivicEvents,
+  clearAllLiveReportsFromCloud,
+  clearAllCivicEventsFromCloud,
 } from './utils/firebaseSync';
+import {
+  reconcileReportLog,
+  reconcileEntireReportList,
+  filterReportsByTimeRange,
+  computeDailySnapshots,
+  computeWeeklyEvidenceSummary,
+} from './utils/reconciliation';
 
 type BottomNavTab = 'map' | 'insights' | 'council';
-type HamburgerPage = 'none' | 'bins_stats' | 'legal_bylaws' | 'watchdog' | 'data_admin';
+type HamburgerPage = 'none' | 'bins_stats' | 'legal_bylaws' | 'watchdog' | 'data_admin' | 'weekly_report';
 
 export function App() {
   const [isAdminRoute, setIsAdminRoute] = useState<boolean>(() => {
@@ -220,6 +238,70 @@ export function App() {
   // Unique provable anonymous device token (no logins, no PII)
   const [submitterToken] = useState<string>(() => getOrCreateSubmitterToken());
 
+  // Real-time Civic Product Analytics & Council Email Telemetry
+  const [civicEvents, setCivicEvents] = useState<CivicActionEvent[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const stored = localStorage.getItem('clean-greystones.events.v1');
+      if (stored !== null) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (err) {
+      console.warn('Failed to parse stored civic events', err);
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    const unsubscribe = subscribeToCivicEvents(
+      (events) => {
+        setCivicEvents(events);
+      },
+      (err) => {
+        console.warn('Civic events subscription unavailable:', err);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('clean-greystones.events.v1', JSON.stringify(civicEvents));
+      } catch (err) {
+        console.warn('Failed to save events to localStorage', err);
+      }
+    }
+  }, [civicEvents]);
+
+  const recordCivicEvent = (
+    type: CivicEventType,
+    meta?: {
+      targetButton?: 'mailto' | 'copy' | 'gmail';
+      templateId?: EmailTemplateId;
+      councillorIds?: string[];
+      reportId?: string;
+      streetName?: string;
+      nearestBinCode?: string;
+    }
+  ) => {
+    const event: CivicActionEvent = {
+      id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type,
+      submitterToken,
+      timestamp: new Date().toISOString(),
+      metadata: {
+        ...meta,
+        userAgent: typeof window !== 'undefined' ? window.navigator.userAgent : undefined,
+      },
+    };
+    setCivicEvents((prev) => [event, ...prev]);
+    logCivicEventToCloud(event).catch((err) => {
+      console.warn('Failed to sync civic event to cloud:', err);
+    });
+  };
+
   // Map Filter & Background Bin Toggle (bins run in background by default so map isn't cluttered)
   const [mapFilter, setMapFilter] = useState<'all' | 'near_bins' | 'wheels' | 'stepped_in'>('all');
   const [showBinOverlayOnMap, setShowBinOverlayOnMap] = useState<boolean>(false);
@@ -333,8 +415,70 @@ export function App() {
   const [emailCopiedToast, setEmailCopiedToast] = useState<string>('');
   const [emailsPreparedCount, setEmailsPreparedCount] = useState<number>(42);
 
+  // 24-Hour Daily Snapshots vs 7-Day Cumulative Map Range
+  const [mapTimeRange, setMapTimeRange] = useState<MapTimeRange>('today');
+  const [isFetchingBackendEvidence, setIsFetchingBackendEvidence] = useState<boolean>(false);
+  const [backendRefreshNotice, setBackendRefreshNotice] = useState<string | null>(null);
+  const [corroborationNotice, setCorroborationNotice] = useState<string | null>(null);
+
+  // Batch Reconcile: cluster reports within 15m and 24h into uncluttered corroborated pins
+  const { reconciled: reconciledReports } = useMemo(
+    () => reconcileEntireReportList(reports, 15, 24),
+    [reports]
+  );
+
+  // Time-filtered reports: 'today' (last 24h for clean daily UI) or 'week' (7-day cumulative map)
+  const visibleReports = useMemo(
+    () => filterReportsByTimeRange(reconciledReports, mapTimeRange),
+    [reconciledReports, mapTimeRange]
+  );
+
+  // 24-Hour Daily Snapshots Archive
+  const dailySnapshots = useMemo(
+    () => computeDailySnapshots(reconciledReports),
+    [reconciledReports]
+  );
+
+  // 7-Day Weekly Evidence Summary for Councillor Email & Weekly Map View
+  const weeklyEvidence: WeeklyEvidenceSummary = useMemo(
+    () => computeWeeklyEvidenceSummary(reconciledReports),
+    [reconciledReports]
+  );
+
+  // Automatically save/update today's snapshot in Cloud Firestore
+  useEffect(() => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todaySnap = dailySnapshots[todayStr];
+    if (todaySnap && todaySnap.totalReports > 0) {
+      saveDailySnapshotToCloud(todaySnap).catch((err) => {
+        console.warn('Could not save daily snapshot to cloud:', err);
+      });
+    }
+  }, [dailySnapshots]);
+
+  // One-shot fetch of latest communal evidence from Cloud Firestore for Councillor Email
+  const handleRefreshBackendEvidence = async () => {
+    setIsFetchingBackendEvidence(true);
+    setBackendRefreshNotice(null);
+    try {
+      const cloudReports = await fetchLiveReportsFromCloud();
+      if (cloudReports.length > 0) {
+        setReports(cloudReports);
+        setBackendRefreshNotice(`Backend evidence updated: ${cloudReports.length} communal reports loaded.`);
+      } else {
+        setBackendRefreshNotice('Backend evidence confirmed: 0 reports active.');
+      }
+    } catch (err) {
+      console.warn('Backend fetch error:', err);
+      setBackendRefreshNotice('Could not reach backend; using cached evidence.');
+    } finally {
+      setIsFetchingBackendEvidence(false);
+      setTimeout(() => setBackendRefreshNotice(null), 4000);
+    }
+  };
+
   // Background Bins-vs-Fouling & Hotspot Intelligence (Node N10)
-  const analysis = useMemo(() => computeBinsVsFoulingAnalysis(reports), [reports]);
+  const analysis = useMemo(() => computeBinsVsFoulingAnalysis(visibleReports), [visibleReports]);
   const hasDemoSeeds = useMemo(() => reports.some((r) => r.isSeededDemo), [reports]);
 
   const draftContext = useMemo(() => {
@@ -347,14 +491,14 @@ export function App() {
     };
   }, [draftCoords, bins]);
 
-  // Instant 1-Tap Log on Map Click or Button Tap
+  // Instant 1-Tap Log on Map Click or Button Tap with 15m Backend Reconciliation
   const logReportImmediately = (lat: number, lng: number, severity: SeverityType) => {
     const loc = inferGreystonesLocation(lat, lng);
     const nearest = findNearestBins(lat, lng, bins);
     const h3Cell = computeGreystonesCell(lat, lng);
 
     const uniqueId = `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
-    const newReport: FoulingReport = {
+    const candidateReport: FoulingReport = {
       id: uniqueId,
       createdAt: new Date().toISOString(),
       lat,
@@ -374,18 +518,51 @@ export function App() {
       isSeededDemo: false,
     };
 
-    setReports((prev) => [newReport, ...prev]);
-    setSelectedReport(newReport);
-    setLastLoggedReport(newReport);
-    setOptionalNote('');
-    setOptionalPhotoPreview(null);
-    setNoteWarnings([]);
-    dismissLiveBanner();
+    // Reconcile against existing reports (15m spatial proximity, 24h temporal proximity)
+    const reconcileRes = reconcileReportLog(candidateReport, reports, 15);
 
-    // Sync immediately to communal cloud backend so other browsers/devices see it in real time
-    syncReportToCloud(newReport).catch((err) => {
-      console.warn('Could not sync new report to communal cloud:', err);
-    });
+    if (reconcileRes.action === 'merged') {
+      const merged = reconcileRes.primaryReport;
+      setReports((prev) => prev.map((r) => (r.id === merged.id ? merged : r)));
+      setSelectedReport(merged);
+      setLastLoggedReport(merged);
+      setOptionalNote('');
+      setOptionalPhotoPreview(null);
+      setNoteWarnings([]);
+      dismissLiveBanner();
+      setCorroborationNotice(
+        `Corroborated existing observation on ${merged.streetName}! Added your verification (+1).`
+      );
+      setTimeout(() => setCorroborationNotice(null), 5000);
+
+      recordCivicEvent('report_corroborated', {
+        reportId: merged.id,
+        streetName: merged.streetName,
+        nearestBinCode: merged.nearestBinCode,
+      });
+
+      mergeReportInCloud(merged, reconcileRes.mergedReportId).catch((err) => {
+        console.warn('Could not merge report in cloud:', err);
+      });
+    } else {
+      setReports((prev) => [candidateReport, ...prev]);
+      setSelectedReport(candidateReport);
+      setLastLoggedReport(candidateReport);
+      setOptionalNote('');
+      setOptionalPhotoPreview(null);
+      setNoteWarnings([]);
+      dismissLiveBanner();
+
+      recordCivicEvent('report_logged', {
+        reportId: candidateReport.id,
+        streetName: candidateReport.streetName,
+        nearestBinCode: candidateReport.nearestBinCode,
+      });
+
+      syncReportToCloud(candidateReport).catch((err) => {
+        console.warn('Could not sync new report to communal cloud:', err);
+      });
+    }
   };
 
   // BUG-1: On map click or drag, record draft coords and open Type Chooser sheet
@@ -515,6 +692,12 @@ export function App() {
       );
     }
 
+    recordCivicEvent('report_corroborated', {
+      reportId,
+      streetName: target?.streetName,
+      nearestBinCode: target?.nearestBinCode,
+    });
+
     incrementConfirmationInCloud(reportId, nextCount).catch((err) => {
       console.warn('Could not sync confirmation count to cloud:', err);
     });
@@ -606,18 +789,18 @@ Kind regards,
 ${residentSignOff || 'A concerned Greystones resident'}`;
 
       if (includeLiveEvidenceStats) {
-        body += `\n\n---\nLive Greystones Map Evidence (cleangreystones.ie):\n• Active Mapped Reports: ${analysis.totalActiveReports} incidents\n• Direct Wheel & Footwear Contaminations: ${analysis.highImpactCount}\n• Primary Hotspot Beside Bins: ${topHotspot}`;
+        body += `\n\n---\nVerified Communal Greystones Evidence (cleangreystones.ie):\n• Past 24 Hours (Active Window): ${weeklyEvidence.todayCount} verified drops\n• 7-Day Cumulative Record: ${weeklyEvidence.totalReports} reports across ${weeklyEvidence.distinctSubmitters} distinct resident devices\n• Direct Wheelchair/Buggy/Footwear Contaminations: ${weeklyEvidence.highImpactCount}\n• Proximity to Public Bins: ${weeklyEvidence.nearBin50mPct}% occurred within 50m of a litter bin\n• Primary Hotspot: ${weeklyEvidence.topHotspots[0]?.streetName || topHotspot}`;
       }
     } else {
       let introParagraph = `I am writing as a resident of Greystones, Co. Wicklow to raise urgent frustration over the volume and frequency of dog fouling across our footpaths, seafront promenade, and public spaces.`;
-      subject = `Dog Fouling in Greystones — ${analysis.totalActiveReports} Mapped Reports (${analysis.nearBin50mPct}% Within 50m of a Bin)`;
+      subject = `Dog Fouling in Greystones — ${weeklyEvidence.totalReports} Reports (${weeklyEvidence.nearBin50mPct}% Within 50m of a Bin)`;
 
       if (selectedTemplateId === 'bin_mythbuster') {
-        subject = `Greystones Dog Fouling Evidence: ${analysis.nearBin50mPct}% of Mapped Fouling Occurs Within 50m of a Public Bin`;
-        introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${analysis.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
+        subject = `Greystones Dog Fouling Evidence: ${weeklyEvidence.nearBin50mPct}% of Mapped Fouling Occurs Within 50m of a Public Bin`;
+        introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${weeklyEvidence.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
       } else if (selectedTemplateId === 'wheel_contamination') {
-        subject = `Footpath Accessibility Hazard: ${analysis.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
-        introParagraph = `Residents have logged ${analysis.totalActiveReports} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
+        subject = `Footpath Accessibility Hazard: ${weeklyEvidence.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
+        introParagraph = `Residents have logged ${weeklyEvidence.totalReports} dog fouling incidents across Greystones (${weeklyEvidence.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
       } else if (selectedTemplateId === 'request_bin') {
         subject = `Request for Dog-Waste Bins on Unserved Greystones Walking Routes (>200m from any bin)`;
         introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit shows 0 dedicated dog-waste bins in the town and >200m bin gaps on outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
@@ -641,10 +824,11 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
 ${introParagraph}
 
 SUMMARY OF MAPPED GREYSTONES EVIDENCE:
-• Active Geo-Tagged Reports: ${analysis.totalActiveReports} incidents across ${analysis.distinctSubmitters} distinct anonymous resident tokens
-• Bin Proximity (Background Audit): ${analysis.nearBin15mPct}% (${analysis.nearBin15mCount} reports) are within 15m of a bin; ${analysis.nearBin50mPct}% are within 50m of a bin.
-• Direct Wheel & Shoe Impact: ${analysis.highImpactCount} incidents (${analysis.highImpactPct}%) involved wheelchair wheels (${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (${analysis.bySeverity.stepped_in.count}).
-• Primary Hotspot Beside Bins: ${topHotspot}
+• Past 24 Hours (Active Window): ${weeklyEvidence.todayCount} reports
+• 7-Day Cumulative Total: ${weeklyEvidence.totalReports} incidents verified across ${weeklyEvidence.distinctSubmitters} distinct anonymous resident devices
+• Bin Proximity (Spatial Audit): ${analysis.nearBin15mPct}% (${analysis.nearBin15mCount} reports) are within 15m of a bin; ${weeklyEvidence.nearBin50mPct}% are within 50m of a bin.
+• Direct Wheel & Footwear Impact: ${weeklyEvidence.highImpactCount} incidents involved wheelchair wheels (${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (${analysis.bySeverity.stepped_in.count}).
+• Primary Hotspots: ${weeklyEvidence.topHotspots.map((h) => `${h.streetName} (${h.count})`).join(', ') || topHotspot}
 • Unserved Outer Routes (>200m from a bin): Kindlestown Woods, Charlesland Spine Path, and Cliff Walk Start (${analysis.gt200mCount} reports).
 
 ${latestFocusBlock}
@@ -685,6 +869,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
     selectedCcIds,
     selectedTemplateId,
     analysis,
+    weeklyEvidence,
     selectedReport,
     lastLoggedReport,
     reports,
@@ -702,6 +887,11 @@ ${residentSignOff || 'A concerned Greystones resident'}
       await navigator.clipboard.writeText(fullText);
       setEmailCopiedToast('Email copied to clipboard');
       setEmailsPreparedCount((c) => c + 1);
+      recordCivicEvent('email_council_copy', {
+        targetButton: 'copy',
+        templateId: selectedTemplateId,
+        councillorIds: selectedCouncillorIds,
+      });
       setTimeout(() => setEmailCopiedToast(''), 3500);
     } catch {
       setEmailCopiedToast('Select the preview text to copy');
@@ -719,6 +909,8 @@ ${residentSignOff || 'A concerned Greystones resident'}
     if (lastLoggedReport?.id === reportId) setLastLoggedReport(null);
     setConfirmDeleteReportId(null);
 
+    recordCivicEvent('report_deleted', { reportId });
+
     deleteReportFromCloud(reportId).catch((err) => {
       console.warn('Could not delete report from cloud:', err);
     });
@@ -732,13 +924,37 @@ ${residentSignOff || 'A concerned Greystones resident'}
     }
   };
 
+  const handleClearAllBackendData = async (options: {
+    clearReports: boolean;
+    clearEvents: boolean;
+  }) => {
+    if (options.clearReports) {
+      await clearAllLiveReportsFromCloud();
+      setReports([]);
+      setSelectedReport(null);
+      setLastLoggedReport(null);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('clean-greystones.reports.v1');
+      }
+    }
+    if (options.clearEvents) {
+      await clearAllCivicEventsFromCloud();
+      setCivicEvents([]);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('clean-greystones.events.v1');
+      }
+    }
+  };
+
   if (isAdminRoute) {
     return (
       <AdminBackendView
         liveReports={reports}
+        civicEvents={civicEvents}
         demoSeedCleared={!hasDemoSeeds}
         onToggleClearDemoSeed={handleToggleDemoSeedsFromAdmin}
         onDeleteReport={handleDeleteSingleReport}
+        onClearAllBackendData={handleClearAllBackendData}
         onExitAdmin={exitAdminPortal}
       />
     );
@@ -951,6 +1167,30 @@ ${residentSignOff || 'A concerned Greystones resident'}
 
               {/* Background Pages Navigation */}
               <nav className="space-y-1.5">
+                {/* 7-Day Weekly Area Report */}
+                <button
+                  type="button"
+                  onClick={() => openHamburgerDestination('weekly_report')}
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-primary mt-0.5">
+                    calendar_month
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm font-semibold text-ink">
+                        Weekly Area Report (7-Day Map)
+                      </p>
+                      <span className="text-[10px] font-semibold bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">
+                        {weeklyEvidence.totalReports} drops
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted">
+                      Full 7-day cumulative fouling breakdown, hotspots, and map view
+                    </p>
+                  </div>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => openHamburgerDestination('bins_stats')}
@@ -1299,6 +1539,124 @@ ${residentSignOff || 'A concerned Greystones resident'}
               </div>
             </div>
           )}
+
+          {/* PAGE E: WEEKLY AREA REPORT & 7-DAY EVIDENCE */}
+          {hamburgerPage === 'weekly_report' && (
+            <div className="space-y-4">
+              <div className="bg-white border border-line rounded-2xl p-4 space-y-4">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <h2 className="font-display text-lg font-bold text-ink">
+                      Greystones 7-Day Cumulative Fouling Report
+                    </h2>
+                    <p className="text-xs text-muted">
+                      Snapshot of all verified dog fouling observations logged across Greystones over the past 7 days.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMapTimeRange('week');
+                      setHamburgerPage('none');
+                      setActiveTab('map');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 hover:opacity-95"
+                  >
+                    <span className="material-symbols-outlined text-sm">map</span>
+                    <span>View 7-Day Map</span>
+                  </button>
+                </div>
+
+                {/* Scorecards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="p-3 rounded-xl bg-canvas border border-line text-center">
+                    <p className="text-xs text-muted font-medium">7-Day Total</p>
+                    <p className="text-xl font-bold text-ink mt-0.5">{weeklyEvidence.totalReports}</p>
+                    <p className="text-[10px] text-muted">verified drops</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-canvas border border-line text-center">
+                    <p className="text-xs text-muted font-medium">Past 24 Hours</p>
+                    <p className="text-xl font-bold text-primary mt-0.5">{weeklyEvidence.todayCount}</p>
+                    <p className="text-[10px] text-muted">active today</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-canvas border border-line text-center">
+                    <p className="text-xs text-muted font-medium">Near Bins (≤50m)</p>
+                    <p className="text-xl font-bold text-ink mt-0.5">{weeklyEvidence.nearBin50mPct}%</p>
+                    <p className="text-[10px] text-muted">beside public bins</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-canvas border border-line text-center">
+                    <p className="text-xs text-muted font-medium">Active Devices</p>
+                    <p className="text-xl font-bold text-ink mt-0.5">{weeklyEvidence.distinctSubmitters}</p>
+                    <p className="text-[10px] text-muted">unique resident tokens</p>
+                  </div>
+                </div>
+
+                {/* Top Hotspots */}
+                <div className="space-y-2">
+                  <h3 className="text-xs font-bold text-ink uppercase tracking-wider">
+                    Top 5 Hotspot Streets This Week
+                  </h3>
+                  <div className="divide-y divide-line border border-line rounded-xl overflow-hidden">
+                    {weeklyEvidence.topHotspots.map((h, i) => (
+                      <div key={h.streetName} className="p-2.5 bg-white flex items-center justify-between text-xs">
+                        <span className="font-semibold text-ink">
+                          {i + 1}. {h.streetName}
+                        </span>
+                        <span className="font-bold text-error bg-red-50 border border-red-200 px-2 py-0.5 rounded-full text-[11px]">
+                          {h.count} incidents
+                        </span>
+                      </div>
+                    ))}
+                    {weeklyEvidence.topHotspots.length === 0 && (
+                      <div className="p-3 text-xs text-muted text-center bg-white">
+                        No reports logged in the past 7 days.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Day-by-day Breakdown */}
+                <div className="space-y-2">
+                  <h3 className="text-xs font-bold text-ink uppercase tracking-wider">
+                    Day-by-Day Activity
+                  </h3>
+                  <div className="grid grid-cols-7 gap-1.5 text-center">
+                    {weeklyEvidence.dailyBreakdown.map((d) => (
+                      <div key={d.date} className="p-2 rounded-lg bg-canvas border border-line text-xs">
+                        <p className="text-[11px] font-semibold text-muted">{d.dayLabel}</p>
+                        <p className="text-base font-bold text-ink mt-0.5">{d.count}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="pt-2 flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMapTimeRange('week');
+                      setHamburgerPage('none');
+                      setActiveTab('map');
+                    }}
+                    className="flex-1 py-2.5 rounded-xl bg-primary text-white text-xs font-bold shadow-xs hover:opacity-95 text-center"
+                  >
+                    Open 7-Day Cumulative Map
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHamburgerPage('none');
+                      setActiveTab('council');
+                    }}
+                    className="px-4 py-2.5 rounded-xl border border-line bg-canvas hover:bg-surface-container text-xs font-semibold text-ink"
+                  >
+                    Email Council with This Evidence
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </main>
       )}
 
@@ -1312,6 +1670,23 @@ ${residentSignOff || 'A concerned Greystones resident'}
               data-agent-surface="map"
               data-agent-state={agentMapState}
             >
+              {/* 7-Day Cumulative Map Mode Banner */}
+              {mapTimeRange === 'week' && (
+                <div className="bg-primary text-white px-3 py-1.5 z-20 flex items-center justify-between text-xs shadow-xs">
+                  <span className="flex items-center gap-1.5 font-medium truncate">
+                    <span className="material-symbols-outlined text-[15px]">calendar_month</span>
+                    <span>7-Day Cumulative Map ({visibleReports.length} drops across Greystones)</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMapTimeRange('today')}
+                    className="shrink-0 bg-white/20 hover:bg-white/30 text-white font-bold text-[10px] px-2 py-0.5 rounded-full transition-colors"
+                  >
+                    Switch to Today (24h)
+                  </button>
+                </div>
+              )}
+
               {/* Clean Slim Filter Bar (Only shown when live reports exist per BUG-2) */}
               {reports.length > 0 && (
                 <section className="bg-white/95 backdrop-blur-sm px-3 py-1.5 z-20 border-b border-line flex items-center justify-between gap-2">
@@ -1363,6 +1738,21 @@ ${residentSignOff || 'A concerned Greystones resident'}
                     >
                       👟 Stepped In ({analysis.bySeverity.stepped_in.count})
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setMapTimeRange((prev) => (prev === 'today' ? 'week' : 'today'))}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors flex items-center gap-1 ${
+                        mapTimeRange === 'week'
+                          ? 'bg-primary text-white'
+                          : 'bg-canvas text-ink border border-line'
+                      }`}
+                      title={mapTimeRange === 'week' ? 'Switch to clean 24-hour daily map' : 'View all reports from the past 7 days'}
+                    >
+                      <span className="material-symbols-outlined text-[13px]">
+                        {mapTimeRange === 'week' ? 'calendar_month' : 'schedule'}
+                      </span>
+                      <span>{mapTimeRange === 'week' ? '7-Day View' : 'Today (24h)'}</span>
+                    </button>
                   </div>
                 </section>
               )}
@@ -1370,7 +1760,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
               {/* Map Viewport */}
               <div className="relative flex-1 flex flex-col overflow-hidden">
                 <GreystonesMapView
-                  reports={reports}
+                  reports={visibleReports}
                   bins={bins}
                   activeFilter={mapFilter}
                   showBinOverlay={showBinOverlayOnMap}
@@ -1395,6 +1785,26 @@ ${residentSignOff || 'A concerned Greystones resident'}
                       <button
                         type="button"
                         onClick={() => setLocationNotice(null)}
+                        className="text-muted hover:text-ink font-bold px-1.5 py-0.5 rounded"
+                        aria-label="Dismiss notice"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Corroboration Notice Toast */}
+                {corroborationNotice && (
+                  <div className="absolute top-14 left-3 right-3 max-w-sm mx-auto z-30 pointer-events-auto">
+                    <div className="bg-white/95 backdrop-blur-md border border-primary rounded-xl px-3 py-2 shadow-lg flex items-center justify-between gap-2 text-ink text-xs">
+                      <span className="flex items-center gap-1.5 font-medium text-primary">
+                        <span>✨</span>
+                        <span>{corroborationNotice}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setCorroborationNotice(null)}
                         className="text-muted hover:text-ink font-bold px-1.5 py-0.5 rounded"
                         aria-label="Dismiss notice"
                       >
@@ -1885,6 +2295,37 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   </p>
                 </div>
 
+                {/* Communal Backend Evidence Sync Status */}
+                <div className="p-3 rounded-xl bg-canvas border border-line flex items-center justify-between gap-2 flex-wrap">
+                  <div className="text-xs">
+                    <p className="font-semibold text-ink flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-primary inline-block" />
+                      <span>Verified Communal Evidence (7-Day Record)</span>
+                    </p>
+                    <p className="text-[11px] text-muted">
+                      {weeklyEvidence.totalReports} total reports across {weeklyEvidence.distinctSubmitters} devices ({weeklyEvidence.todayCount} active past 24h)
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRefreshBackendEvidence}
+                    disabled={isFetchingBackendEvidence}
+                    className="px-2.5 py-1.5 rounded-lg border border-line bg-white hover:bg-canvas text-xs font-semibold text-ink flex items-center gap-1.5 transition-colors"
+                  >
+                    <span
+                      className={`material-symbols-outlined text-sm ${
+                        isFetchingBackendEvidence ? 'animate-spin' : ''
+                      }`}
+                    >
+                      sync
+                    </span>
+                    <span>{isFetchingBackendEvidence ? 'Fetching...' : 'Fetch Latest Evidence'}</span>
+                  </button>
+                </div>
+                {backendRefreshNotice && (
+                  <p className="text-xs font-semibold text-primary">{backendRefreshNotice}</p>
+                )}
+
                 {/* 1. Template Choice */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-ink">1. Select Template</label>
@@ -2032,7 +2473,14 @@ ${residentSignOff || 'A concerned Greystones resident'}
                 <div className="space-y-2">
                   <a
                     href={generatedEmail.mailtoHref}
-                    onClick={() => setEmailsPreparedCount((c) => c + 1)}
+                    onClick={() => {
+                      setEmailsPreparedCount((c) => c + 1);
+                      recordCivicEvent('email_council_mailto', {
+                        targetButton: 'mailto',
+                        templateId: selectedTemplateId,
+                        councillorIds: selectedCouncillorIds,
+                      });
+                    }}
                     className="w-full h-12 bg-primary hover:bg-primary-container text-white rounded-2xl font-display text-sm font-bold flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-lg">mail</span>
@@ -2051,6 +2499,13 @@ ${residentSignOff || 'A concerned Greystones resident'}
                       href={generatedEmail.gmailHref}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={() => {
+                        recordCivicEvent('email_council_gmail', {
+                          targetButton: 'gmail',
+                          templateId: selectedTemplateId,
+                          councillorIds: selectedCouncillorIds,
+                        });
+                      }}
                       className="h-10 rounded-xl border border-line bg-white hover:bg-canvas text-xs font-semibold text-ink flex items-center justify-center gap-1.5"
                     >
                       <span className="material-symbols-outlined text-sm">open_in_new</span>

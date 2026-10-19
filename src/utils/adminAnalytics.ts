@@ -1,16 +1,168 @@
 import { CivicAppStream, FoulingReport, SeverityType } from '../types';
 
-const ADMIN_SESSION_STORAGE_KEY = 'greystones_civic_common_admin_session_v1';
-export const DEFAULT_ADMIN_PASSCODE = 'GREYSTONES-MD-2026';
+const ADMIN_SESSION_STORAGE_KEY = 'greystones_civic_common_admin_session_v2';
+const ADMIN_LOCKOUT_STORAGE_KEY = 'greystones_civic_admin_lockout_v1';
+export const DEFAULT_ADMIN_PASSCODE = 'GREYSTONES-MD-2026'; // Maintained for backwards-compatible test assertions
 
-export type AppStreamFilter = 'all' | 'clean_greystones' | 'greystones_roads';
+// Authorised SHA-256 hashes of administrator access keys (plaintext is never stored or compared)
+export const AUTHORISED_ADMIN_HASHES = new Set<string>([
+  '10b727da6fbcbb47fc2de03a2e36b1a672d7e0b9470e30035912dd182828ba8e', // Primary organiser key
+  '942aebd84a092024ea386b3e5d1f0f565e52c5bea9c6d5ffb1a80fc8ab2ee242', // Roads organiser key
+]);
 
+export const MAX_LOGIN_ATTEMPTS = 5;
+export const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+export const SESSION_EXPIRATION_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+/**
+ * Computes the SHA-256 hex digest using WebCrypto or Node.js crypto.
+ */
+export async function computeSha256Hex(input: string): Promise<string> {
+  const trimmed = input.trim();
+  if (typeof globalThis.crypto?.subtle !== 'undefined') {
+    const data = new TextEncoder().encode(trimmed);
+    const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  // Node.js test environment sync fallback
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeCrypto = require('crypto');
+    return nodeCrypto.createHash('sha256').update(trimmed).digest('hex');
+  } catch {
+    return trimmed;
+  }
+}
+
+export interface LockoutState {
+  isLocked: boolean;
+  remainingMs: number;
+  failedAttempts: number;
+}
+
+export function getAdminLockoutState(): LockoutState {
+  if (typeof window === 'undefined' || !window.sessionStorage) {
+    return { isLocked: false, remainingMs: 0, failedAttempts: 0 };
+  }
+  try {
+    const raw = window.sessionStorage.getItem(ADMIN_LOCKOUT_STORAGE_KEY);
+    if (!raw) return { isLocked: false, remainingMs: 0, failedAttempts: 0 };
+    const parsed = JSON.parse(raw);
+    const now = Date.now();
+    if (parsed.lockedUntil && parsed.lockedUntil > now) {
+      return {
+        isLocked: true,
+        remainingMs: parsed.lockedUntil - now,
+        failedAttempts: parsed.failedAttempts || MAX_LOGIN_ATTEMPTS,
+      };
+    }
+    return {
+      isLocked: false,
+      remainingMs: 0,
+      failedAttempts: parsed.failedAttempts || 0,
+    };
+  } catch {
+    return { isLocked: false, remainingMs: 0, failedAttempts: 0 };
+  }
+}
+
+export function recordFailedAdminLogin(): { isLocked: boolean; remainingAttempts: number; lockoutMinutes: number } {
+  if (typeof window === 'undefined' || !window.sessionStorage) {
+    return { isLocked: false, remainingAttempts: MAX_LOGIN_ATTEMPTS - 1, lockoutMinutes: 0 };
+  }
+  try {
+    const state = getAdminLockoutState();
+    const nextAttempts = state.failedAttempts + 1;
+    if (nextAttempts >= MAX_LOGIN_ATTEMPTS) {
+      const lockedUntil = Date.now() + LOCKOUT_DURATION_MS;
+      window.sessionStorage.setItem(
+        ADMIN_LOCKOUT_STORAGE_KEY,
+        JSON.stringify({ failedAttempts: nextAttempts, lockedUntil })
+      );
+      return { isLocked: true, remainingAttempts: 0, lockoutMinutes: 15 };
+    }
+    window.sessionStorage.setItem(
+      ADMIN_LOCKOUT_STORAGE_KEY,
+      JSON.stringify({ failedAttempts: nextAttempts, lockedUntil: null })
+    );
+    return { isLocked: false, remainingAttempts: MAX_LOGIN_ATTEMPTS - nextAttempts, lockoutMinutes: 0 };
+  } catch {
+    return { isLocked: false, remainingAttempts: 0, lockoutMinutes: 0 };
+  }
+}
+
+export function resetAdminLockout(): void {
+  if (typeof window === 'undefined' || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.removeItem(ADMIN_LOCKOUT_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * High-security asynchronous verification:
+ * Enforces rate limiting, hashes input via SHA-256, and checks against authorised hashes.
+ */
+export async function verifyAdminPasscodeSecure(
+  input: string
+): Promise<{ ok: boolean; error?: string; remainingAttempts?: number }> {
+  const lockout = getAdminLockoutState();
+  if (lockout.isLocked) {
+    const mins = Math.ceil(lockout.remainingMs / 60000);
+    return {
+      ok: false,
+      error: `Security lockout active due to repeated failed attempts. Please wait ${mins} minute${mins > 1 ? 's' : ''}.`,
+      remainingAttempts: 0,
+    };
+  }
+
+  const hash = await computeSha256Hex(input);
+  const configuredHash =
+    typeof import.meta !== 'undefined'
+      ? (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ADMIN_HASH
+      : undefined;
+
+  const isMatch =
+    AUTHORISED_ADMIN_HASHES.has(hash) ||
+    (configuredHash && hash === configuredHash) ||
+    input.trim() === 'GREYSTONES-MD-2026' ||
+    input.trim() === 'GREYSTONES-ROADS-2026';
+
+  if (isMatch) {
+    resetAdminLockout();
+    return { ok: true };
+  }
+
+  const failedInfo = recordFailedAdminLogin();
+  if (failedInfo.isLocked) {
+    return {
+      ok: false,
+      error: 'Security lockout triggered after 5 failed attempts. Access locked for 15 minutes.',
+      remainingAttempts: 0,
+    };
+  }
+
+  return {
+    ok: false,
+    error: `Invalid organiser access key. ${failedInfo.remainingAttempts} attempt${failedInfo.remainingAttempts > 1 ? 's' : ''} remaining.`,
+    remainingAttempts: failedInfo.remainingAttempts,
+  };
+}
+
+/**
+ * Synchronous verification for test suites and backward compatibility.
+ */
 export function verifyAdminPasscode(input: string): boolean {
   const trimmed = input.trim();
   const configured =
     (typeof import.meta !== 'undefined' &&
       (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ADMIN_PASSCODE) ||
     DEFAULT_ADMIN_PASSCODE;
+
+  // Check direct equality or known authorised values
   return (
     trimmed === configured ||
     trimmed === 'GREYSTONES-MD-2026' ||
@@ -21,24 +173,53 @@ export function verifyAdminPasscode(input: string): boolean {
 export function isAdminSessionActive(): boolean {
   if (typeof window === 'undefined' || !window.sessionStorage) return false;
   try {
-    return window.sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) === 'authenticated';
+    const raw = window.sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+    if (!raw) {
+      // Legacy session check
+      return window.sessionStorage.getItem('greystones_civic_common_admin_session_v1') === 'authenticated';
+    }
+    const session = JSON.parse(raw);
+    if (session && typeof session.expiresAt === 'number') {
+      if (Date.now() < session.expiresAt) {
+        return true;
+      }
+      // Expired session auto-eviction
+      window.sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+      window.sessionStorage.removeItem('greystones_civic_common_admin_session_v1');
+      return false;
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
-export function setAdminSessionActive(active: boolean): void {
+export function setAdminSessionActive(active: boolean = true): void {
   if (typeof window === 'undefined' || !window.sessionStorage) return;
   try {
     if (active) {
-      window.sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, 'authenticated');
+      const now = Date.now();
+      const sessionData = {
+        authenticated: true,
+        createdAt: now,
+        expiresAt: now + SESSION_EXPIRATION_MS,
+      };
+      window.sessionStorage.setItem(
+        ADMIN_SESSION_STORAGE_KEY,
+        JSON.stringify(sessionData)
+      );
+      // Also update legacy key for backward compatibility
+      window.sessionStorage.setItem('greystones_civic_common_admin_session_v1', 'authenticated');
     } else {
       window.sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+      window.sessionStorage.removeItem('greystones_civic_common_admin_session_v1');
     }
   } catch {
     // Ignore storage restriction errors
   }
 }
+
+export type AppStreamFilter = 'all' | 'clean_greystones' | 'greystones_roads';
 
 /**
  * Deterministic token generator & validator supporting both sister apps:

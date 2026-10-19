@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { CivicAppStream, FoulingReport } from '../types';
+import { CivicActionEvent, CivicAppStream, FoulingReport } from '../types';
 import { computeBinsVsFoulingAnalysis } from '../utils/graphEngine';
+import { computeProductMetrics } from '../utils/productMetrics';
 import {
   AppStreamFilter,
   computeTemporalAndSeasonalModel,
-  DEFAULT_ADMIN_PASSCODE,
   exportReportsToCsv,
+  getAdminLockoutState,
   getReportSeverityDisplay,
   HISTORICAL_DOG_FOULING_COHORT,
   HISTORICAL_ROADS_COHORT,
@@ -13,25 +14,29 @@ import {
   isAdminSessionActive,
   isValidAnyCivicToken,
   setAdminSessionActive,
-  verifyAdminPasscode,
+  verifyAdminPasscodeSecure,
 } from '../utils/adminAnalytics';
 
 interface AdminBackendViewProps {
   liveReports: FoulingReport[];
+  civicEvents?: CivicActionEvent[];
   demoSeedCleared: boolean;
   onToggleClearDemoSeed: () => void;
   onDeleteReport: (id: string) => void;
+  onClearAllBackendData?: (options: { clearReports: boolean; clearEvents: boolean }) => Promise<void>;
   onExitAdmin: () => void;
   defaultAppFilter?: AppStreamFilter;
 }
 
-type AdminTab = 'seasonality' | 'diurnal' | 'cohorts' | 'ledger';
+type AdminTab = 'metrics' | 'seasonality' | 'diurnal' | 'cohorts' | 'ledger';
 
 export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   liveReports,
+  civicEvents = [],
   demoSeedCleared,
   onToggleClearDemoSeed,
   onDeleteReport,
+  onClearAllBackendData,
   onExitAdmin,
   defaultAppFilter,
 }) => {
@@ -71,22 +76,39 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   );
   const [passcodeInput, setPasscodeInput] = useState<string>('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
   const [datasetScope, setDatasetScope] = useState<'full_12m' | 'live_only'>('full_12m');
-  const [activeTab, setActiveTab] = useState<AdminTab>('seasonality');
+  const [activeTab, setActiveTab] = useState<AdminTab>('metrics');
   const [zoneFilter, setZoneFilter] = useState<string>('ALL');
   const [severityFilter, setSeverityFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [exportToast, setExportToast] = useState<string | null>(null);
+  const [showClearModal, setShowClearModal] = useState<boolean>(false);
+  const [clearEventsFlag, setClearEventsFlag] = useState<boolean>(true);
+  const [isClearingBackend, setIsClearingBackend] = useState<boolean>(false);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const lockoutState = useMemo(() => getAdminLockoutState(), [loginError]);
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (verifyAdminPasscode(passcodeInput)) {
-      setAdminSessionActive(true);
-      setIsAuthenticated(true);
-      setLoginError(null);
-    } else {
-      setLoginError('Invalid admin passcode. Use GREYSTONES-MD-2026.');
+    if (!passcodeInput.trim()) return;
+    setIsLoggingIn(true);
+    setLoginError(null);
+    try {
+      const res = await verifyAdminPasscodeSecure(passcodeInput);
+      if (res.ok) {
+        setAdminSessionActive(true);
+        setIsAuthenticated(true);
+        setLoginError(null);
+        setPasscodeInput('');
+      } else {
+        setLoginError(res.error || 'Invalid administrator credentials.');
+      }
+    } catch {
+      setLoginError('Authentication verification error. Please try again.');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -94,6 +116,26 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
     setAdminSessionActive(false);
     setIsAuthenticated(false);
     setPasscodeInput('');
+  };
+
+  const handleConfirmClearBackend = async () => {
+    if (!onClearAllBackendData) return;
+    setIsClearingBackend(true);
+    try {
+      await onClearAllBackendData({
+        clearReports: true,
+        clearEvents: clearEventsFlag,
+      });
+      setShowClearModal(false);
+      setExportToast('Live backend data cleared from Cloud Firestore.');
+      setTimeout(() => setExportToast(null), 4000);
+    } catch (err) {
+      console.error('Failed to clear backend data:', err);
+      setExportToast('Could not clear backend data. Check network connection.');
+      setTimeout(() => setExportToast(null), 4000);
+    } finally {
+      setIsClearingBackend(false);
+    }
   };
 
   // Build unified multi-app dataset before user zone/severity/search filters
@@ -169,6 +211,11 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   const spatialSummary = useMemo(
     () => computeBinsVsFoulingAnalysis(combinedDataset),
     [combinedDataset]
+  );
+
+  const productMetrics = useMemo(
+    () => computeProductMetrics(combinedDataset, civicEvents),
+    [combinedDataset, civicEvents]
   );
 
   const availableZones = useMemo(() => {
@@ -268,6 +315,19 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               weekend spike, and diurnal time-of-day models.
             </p>
 
+            {lockoutState.isLocked && (
+              <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-error text-xs flex items-center gap-2">
+                <span className="text-base">🔒</span>
+                <div>
+                  <p className="font-bold">Security Lockout Active</p>
+                  <p className="text-[11px] text-red-700">
+                    Too many consecutive failed login attempts. Access is locked for{' '}
+                    <strong>{Math.ceil(lockoutState.remainingMs / 60000)} minute(s)</strong> to protect the municipal database.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleLoginSubmit} className="mt-6 space-y-4">
               <div>
                 <label
@@ -279,14 +339,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 <input
                   id="admin-passcode"
                   type="password"
+                  disabled={lockoutState.isLocked || isLoggingIn}
                   value={passcodeInput}
                   onChange={(e) => {
                     setPasscodeInput(e.target.value);
                     if (loginError) setLoginError(null);
                   }}
-                  placeholder="Enter organiser passcode…"
-                  className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-2 focus:ring-primary"
-                  autoFocus
+                  placeholder={lockoutState.isLocked ? 'Access temporarily locked…' : 'Enter organiser access key…'}
+                  className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  autoFocus={!lockoutState.isLocked}
                 />
                 {loginError && (
                   <p className="text-xs text-error font-medium mt-1.5">{loginError}</p>
@@ -295,26 +356,20 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-2.5 px-4 rounded-xl bg-primary hover:bg-primary-container text-white font-semibold text-sm transition shadow-sm"
+                disabled={lockoutState.isLocked || isLoggingIn || !passcodeInput.trim()}
+                className="w-full py-2.5 px-4 rounded-xl bg-primary hover:bg-primary-container text-white font-semibold text-sm transition shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Sign In to Common Civic Backend
+                {isLoggingIn ? (
+                  <span>Verifying Credentials…</span>
+                ) : (
+                  <span>Sign In to Common Civic Backend</span>
+                )}
               </button>
 
-              <div className="pt-3 border-t border-line flex items-center justify-between gap-2">
-                <span className="text-[11px] text-muted font-mono">
-                  Key: <strong className="text-ink">{DEFAULT_ADMIN_PASSCODE}</strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPasscodeInput(DEFAULT_ADMIN_PASSCODE);
-                    setAdminSessionActive(true);
-                    setIsAuthenticated(true);
-                  }}
-                  className="text-xs font-semibold text-primary hover:underline"
-                >
-                  1-Click Demo Admin Sign-In →
-                </button>
+              <div className="pt-3 border-t border-line text-center">
+                <p className="text-[11px] text-muted leading-relaxed">
+                  🔒 Protected with SHA-256 cryptographic hashing, brute-force rate-limiting, and expiring 2-hour sessions.
+                </p>
               </div>
             </form>
           </div>
@@ -375,6 +430,17 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {onClearAllBackendData && (
+              <button
+                type="button"
+                onClick={() => setShowClearModal(true)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-error flex items-center gap-1 transition shadow-xs"
+                title="Wipe live cloud data from Firestore"
+              >
+                <span>🗑️</span>
+                <span className="hidden sm:inline">Clear Backend</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onExitAdmin}
@@ -396,10 +462,11 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
         <div className="max-w-6xl mx-auto px-3 sm:px-6 border-t border-line flex items-center gap-1 overflow-x-auto no-scrollbar">
           {(
             [
-              { id: 'seasonality', label: '1. Seasonality (12M)' },
-              { id: 'diurnal', label: '2. Weekend & Time' },
-              { id: 'cohorts', label: '3. Tokens & Zones' },
-              { id: 'ledger', label: `4. Ledger (${combinedDataset.length})` },
+              { id: 'metrics', label: '1. Product & Council Emails' },
+              { id: 'seasonality', label: '2. Seasonality (12M)' },
+              { id: 'diurnal', label: '3. Weekend & Time' },
+              { id: 'cohorts', label: '4. Tokens & Zones' },
+              { id: 'ledger', label: `5. Incident Ledger (${combinedDataset.length})` },
             ] as { id: AdminTab; label: string }[]
           ).map((t) => (
             <button
@@ -739,6 +806,399 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
             )}
           </div>
         </section>
+
+        {/* TAB 0: PRODUCT METRICS, ACTIVE USERS & EMAIL ACTIVITY */}
+        {activeTab === 'metrics' && (
+          <div className="space-y-6">
+            {/* Executive Overview Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white p-5 rounded-2xl border border-line shadow-xs">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                    Live Product & Civic Impact Dashboard
+                  </span>
+                  <span className="text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    Real-Time Telemetry
+                  </span>
+                </div>
+                <h2 className="text-lg font-bold text-ink mt-0.5">
+                  Greystones Resident Adoption & Council Engagement
+                </h2>
+                <p className="text-xs text-muted mt-1 max-w-2xl">
+                  Tracking active residents, daily fouling spots, email conversions to councillors, and button click behaviour across devices.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {onClearAllBackendData && (
+                  <button
+                    type="button"
+                    onClick={() => setShowClearModal(true)}
+                    className="px-3.5 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-error border border-red-200 text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
+                  >
+                    <span>🗑️</span>
+                    <span>Clear Live Backend Data</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 4 KPI Scorecards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+              <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+                <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-muted">
+                  <span>Resident Active Users</span>
+                  <span className="text-[10px] text-primary font-bold">DAU / MAU</span>
+                </div>
+                <p className="text-2xl font-bold text-ink mt-1">
+                  {productMetrics.dau} <span className="text-xs font-normal text-muted">DAU</span> · {productMetrics.mau} <span className="text-xs font-normal text-muted">MAU</span>
+                </p>
+                <div className="text-xs text-muted mt-2 space-y-0.5">
+                  <p>• <strong>{productMetrics.dau}</strong> active today (24h)</p>
+                  <p>• <strong>{productMetrics.wau}</strong> active this week (7d)</p>
+                  <p>• <strong>{productMetrics.totalUniqueTokens}</strong> all-time verified tokens</p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+                <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-muted">
+                  <span>Council Email Clicks</span>
+                  <span className="text-[10px] text-primary font-bold">{productMetrics.emailConversionRate}% conversion</span>
+                </div>
+                <p className="text-2xl font-bold text-primary mt-1">
+                  {productMetrics.totalEmailClicks} <span className="text-xs font-normal text-muted">clicks</span>
+                </p>
+                <div className="text-xs text-muted mt-2 space-y-0.5">
+                  <p>• <strong>{productMetrics.uniqueEmailSenders}</strong> distinct residents emailed</p>
+                  <p>• <strong>{productMetrics.mailtoClicks}</strong> in native email apps</p>
+                  <p>• <strong>{productMetrics.copyClicks}</strong> copied text · <strong>{productMetrics.gmailClicks}</strong> Gmail</p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+                <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-muted">
+                  <span>Poos Logged Daily Rate</span>
+                  <span className="text-[10px] text-primary font-bold">14-Day Baseline</span>
+                </div>
+                <p className="text-2xl font-bold text-ink mt-1">
+                  {productMetrics.avgPoosPerDay} <span className="text-xs font-normal text-muted">avg / day</span>
+                </p>
+                <div className="text-xs text-muted mt-2 space-y-0.5">
+                  <p>• <strong>{productMetrics.totalPoosLogged}</strong> total observations mapped</p>
+                  <p>• <strong>{productMetrics.corroborationRate}%</strong> corroborated by 2+ residents</p>
+                  <p>• <strong>{productMetrics.highImpactPct}%</strong> wheelchair/buggy/shoe hits</p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-line p-4 shadow-xs">
+                <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-muted">
+                  <span>Bin Proximity Audit</span>
+                  <span className="text-[10px] text-error font-bold">Enforcement Gap</span>
+                </div>
+                <p className="text-2xl font-bold text-error mt-1">
+                  {productMetrics.nearBin50mPct}% <span className="text-xs font-normal text-muted">≤50m of bin</span>
+                </p>
+                <div className="text-xs text-muted mt-2 space-y-0.5">
+                  <p>• <strong>{spatialSummary.nearBin15mPct}%</strong> right beside bins (≤15m)</p>
+                  <p>• <strong>{spatialSummary.gt200mCount}</strong> on unserved routes (&gt;200m)</p>
+                  <p>• <strong>0</strong> dedicated dog-waste bins in town</p>
+                </div>
+              </div>
+            </div>
+
+            {/* WHO HAS EMAILED THE COUNCIL (Ledger) */}
+            <section className="bg-white rounded-2xl border border-line p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-line">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                      Citizen Engagement Audit
+                    </span>
+                    <span className="text-[10px] font-bold bg-primary text-white px-2 py-0.5 rounded-full">
+                      {productMetrics.emailLedger.length} Total Emails Prepared
+                    </span>
+                  </div>
+                  <h3 className="text-base font-bold text-ink mt-0.5">
+                    Who Has Emailed the Council (Resident Device Ledger)
+                  </h3>
+                  <p className="text-xs text-muted">
+                    Anonymised cryptographic tokens showing which residents clicked to email councillors, which template they sent, and when.
+                  </p>
+                </div>
+              </div>
+
+              {productMetrics.emailLedger.length === 0 ? (
+                <div className="p-8 text-center bg-canvas rounded-xl border border-line space-y-2">
+                  <span className="text-3xl">📬</span>
+                  <p className="text-sm font-semibold text-ink">No councillor email clicks recorded yet</p>
+                  <p className="text-xs text-muted max-w-md mx-auto">
+                    When residents tap &ldquo;Open in Your Email App&rdquo;, &ldquo;Copy Email&rdquo;, or &ldquo;Gmail Web&rdquo; on the Email Council tab, their anonymised token and template selection will appear here in real time.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-line text-muted font-mono uppercase text-[10px]">
+                        <th className="py-2.5 pr-3">Submitter Token</th>
+                        <th className="py-2.5 pr-3">Timestamp (UTC)</th>
+                        <th className="py-2.5 pr-3">Action Button Clicked</th>
+                        <th className="py-2.5 pr-3">Template Selected</th>
+                        <th className="py-2.5 pr-3">Targeted Councillors</th>
+                        <th className="py-2.5">Verification</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-line">
+                      {productMetrics.emailLedger.slice(0, 50).map((ev) => (
+                        <tr key={ev.id} className="hover:bg-canvas/60">
+                          <td className="py-2.5 pr-3 font-mono font-semibold text-ink">
+                            {ev.submitterToken}
+                          </td>
+                          <td className="py-2.5 pr-3 font-mono text-muted whitespace-nowrap">
+                            {ev.timestamp.slice(0, 16).replace('T', ' ')}
+                          </td>
+                          <td className="py-2.5 pr-3 whitespace-nowrap">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                ev.type === 'email_council_mailto'
+                                  ? 'bg-emerald-50 text-[#006948] border-emerald-200'
+                                  : ev.type === 'email_council_gmail'
+                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                  : 'bg-purple-50 text-purple-700 border-purple-200'
+                              }`}
+                            >
+                              {ev.type === 'email_council_mailto'
+                                ? '✉️ Open Email App'
+                                : ev.type === 'email_council_gmail'
+                                ? '🌐 Gmail Web'
+                                : '📋 Copied Email'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 pr-3 font-medium text-ink">
+                            {ev.metadata?.templateLabel || ev.metadata?.templateId || 'Practical Action'}
+                          </td>
+                          <td className="py-2.5 pr-3 text-muted">
+                            {ev.metadata?.councillors?.length
+                              ? `${ev.metadata.councillors.length} Councillors (${ev.metadata.councillors.slice(0, 2).join(', ')}…)`
+                              : 'All 6 MD Councillors'}
+                          </td>
+                          <td className="py-2.5">
+                            <span className="text-[10px] font-mono text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                              ✓ Valid Checksum
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            {/* NUMBER OF POOS LOGGED PER DAY (Time-Series & Chart) */}
+            <section className="bg-white rounded-2xl border border-line p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-line">
+                <div>
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-primary font-semibold">
+                    Daily Incident Telemetry
+                  </span>
+                  <h3 className="text-base font-bold text-ink mt-0.5">
+                    Number of Poos Logged per Day (Last 14 Days)
+                  </h3>
+                  <p className="text-xs text-muted">
+                    Daily activity breakdown showing observation counts, high-impact hits (wheels/shoes), and distinct reporting devices.
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-semibold text-ink">14-Day Total: </span>
+                  <span className="text-sm font-bold text-primary">
+                    {productMetrics.dailyPoos.reduce((acc, d) => acc + d.count, 0)} drops
+                  </span>
+                </div>
+              </div>
+
+              {/* 14-Day Visual Bar Chart */}
+              <div className="grid grid-cols-7 sm:grid-cols-14 gap-2 pt-2">
+                {(() => {
+                  const maxDay = Math.max(...productMetrics.dailyPoos.map((d) => d.count), 1);
+                  return productMetrics.dailyPoos.map((d) => {
+                    const heightPct = Math.round((d.count / maxDay) * 100);
+                    return (
+                      <div key={d.date} className="flex flex-col items-center gap-1.5 group">
+                        <span className="text-[10px] font-mono font-bold text-ink">{d.count}</span>
+                        <div className="w-full h-24 bg-canvas rounded-lg border border-line flex items-end p-1 relative overflow-hidden">
+                          <div
+                            style={{ height: `${Math.max(heightPct, 6)}%` }}
+                            className={`w-full rounded-md transition-all ${
+                              d.count > 0 ? 'bg-primary group-hover:bg-primary-container' : 'bg-line'
+                            }`}
+                            title={`${d.date}: ${d.count} poos (${d.highImpactCount} high impact, ${d.distinctSubmitters} residents)`}
+                          />
+                        </div>
+                        <div className="text-center">
+                          <span className="block text-[10px] font-bold text-ink">{d.dayLabel}</span>
+                          <span className="block text-[9px] font-mono text-muted">{d.date.slice(5)}</span>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+
+              {/* Summary Table */}
+              <div className="overflow-x-auto pt-2">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-line text-muted font-mono uppercase text-[10px]">
+                      <th className="py-2 pr-3">Date</th>
+                      <th className="py-2 pr-3">Day</th>
+                      <th className="py-2 pr-3">Poos Logged</th>
+                      <th className="py-2 pr-3">Wheel / Shoe Contaminations</th>
+                      <th className="py-2">Active Reporting Devices</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {productMetrics.dailyPoos
+                      .slice()
+                      .reverse()
+                      .map((d) => (
+                        <tr key={d.date} className="hover:bg-canvas/50">
+                          <td className="py-2 pr-3 font-mono font-semibold text-ink">{d.date}</td>
+                          <td className="py-2 pr-3 text-muted">{d.dayLabel}</td>
+                          <td className="py-2 pr-3 font-bold text-ink">
+                            <span className={d.count > 0 ? 'text-primary' : 'text-muted'}>
+                              {d.count}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-3">
+                            {d.highImpactCount > 0 ? (
+                              <span className="text-error font-semibold">
+                                {d.highImpactCount} hits
+                              </span>
+                            ) : (
+                              <span className="text-muted">0</span>
+                            )}
+                          </td>
+                          <td className="py-2 font-mono text-muted">{d.distinctSubmitters} devices</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {/* BUTTON CLICK BREAKDOWN & CONVERSION FUNNEL */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <section className="bg-white rounded-2xl border border-line p-5 shadow-xs space-y-3">
+                <h3 className="text-sm font-bold text-ink">Email Action Button Clicks Breakdown</h3>
+                <p className="text-xs text-muted">
+                  How residents choose to dispatch their email to Greystones Municipal District councillors:
+                </p>
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-canvas border border-line text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">✉️</span>
+                      <div>
+                        <p className="font-semibold text-ink">Open in Email App (mailto)</p>
+                        <p className="text-[11px] text-muted">Default system mail client</p>
+                      </div>
+                    </div>
+                    <span className="font-bold text-base text-primary">{productMetrics.mailtoClicks}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-canvas border border-line text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">📋</span>
+                      <div>
+                        <p className="font-semibold text-ink">Copy Full Email Text</p>
+                        <p className="text-[11px] text-muted">Manual paste into custom mail client</p>
+                      </div>
+                    </div>
+                    <span className="font-bold text-base text-ink">{productMetrics.copyClicks}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-canvas border border-line text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🌐</span>
+                      <div>
+                        <p className="font-semibold text-ink">Gmail Web Composer</p>
+                        <p className="text-[11px] text-muted">Direct browser Gmail link</p>
+                      </div>
+                    </div>
+                    <span className="font-bold text-base text-ink">{productMetrics.gmailClicks}</span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="bg-white rounded-2xl border border-line p-5 shadow-xs space-y-3">
+                <h3 className="text-sm font-bold text-ink">Civic Engagement Conversion Funnel</h3>
+                <p className="text-xs text-muted">
+                  From anonymous visitor to verified councillor email advocate:
+                </p>
+                <div className="space-y-2.5 pt-1 text-xs">
+                  <div>
+                    <div className="flex justify-between font-semibold pb-1">
+                      <span>1. Unique Resident Tokens (Top of Funnel)</span>
+                      <span>{productMetrics.totalUniqueTokens}</span>
+                    </div>
+                    <div className="w-full bg-canvas h-2.5 rounded-full overflow-hidden border border-line">
+                      <div className="bg-primary h-full rounded-full w-full" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-semibold pb-1">
+                      <span>2. Logged Observation on Map</span>
+                      <span>{productMetrics.totalPoosLogged} drops</span>
+                    </div>
+                    <div className="w-full bg-canvas h-2.5 rounded-full overflow-hidden border border-line">
+                      <div
+                        style={{
+                          width: `${Math.min(
+                            Math.round(
+                              (productMetrics.totalPoosLogged /
+                                Math.max(productMetrics.totalUniqueTokens, 1)) *
+                                100
+                            ),
+                            100
+                          )}%`,
+                        }}
+                        className="bg-primary h-full rounded-full"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-semibold pb-1">
+                      <span>3. Corroborated Multi-Resident Pins (+1)</span>
+                      <span>{productMetrics.corroborationRate}% rate</span>
+                    </div>
+                    <div className="w-full bg-canvas h-2.5 rounded-full overflow-hidden border border-line">
+                      <div
+                        style={{ width: `${productMetrics.corroborationRate}%` }}
+                        className="bg-primary h-full rounded-full"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-semibold pb-1">
+                      <span>4. Dispatched Email to Council</span>
+                      <span className="text-primary font-bold">
+                        {productMetrics.uniqueEmailSenders} ({productMetrics.emailConversionRate}% conversion)
+                      </span>
+                    </div>
+                    <div className="w-full bg-canvas h-2.5 rounded-full overflow-hidden border border-line">
+                      <div
+                        style={{ width: `${Math.min(productMetrics.emailConversionRate, 100)}%` }}
+                        className="bg-primary h-full rounded-full"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        )}
 
         {/* TAB 1: TIME-SERIES & SEASONALITY LAB */}
         {activeTab === 'seasonality' && (
@@ -1218,6 +1678,16 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                {onClearAllBackendData && (
+                  <button
+                    type="button"
+                    onClick={() => setShowClearModal(true)}
+                    className="px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-xs font-semibold text-error transition flex items-center gap-1 shadow-xs"
+                  >
+                    <span>🗑️</span>
+                    <span>Clear Live Backend Data</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={onToggleClearDemoSeed}
@@ -1335,6 +1805,67 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
           </section>
         )}
       </main>
+
+      {/* CLEAR BACKEND DATA CONFIRMATION MODAL */}
+      {showClearModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-line shadow-2xl p-6 space-y-4 animate-in fade-in duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 text-error flex items-center justify-center text-xl shrink-0">
+                ⚠️
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-ink">
+                  Clear Live Backend Data
+                </h3>
+                <p className="text-xs text-muted">
+                  Permanent wipe of crowdsourced cloud documents
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-canvas border border-line text-xs text-ink space-y-2">
+              <p className="leading-relaxed">
+                This will delete all live reports in Cloud Firestore (<code className="font-mono font-bold text-ink">clean_greystones_reports</code>) and reset the cached data on all connected devices.
+              </p>
+              <label className="flex items-center gap-2 pt-1 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={clearEventsFlag}
+                  onChange={(e) => setClearEventsFlag(e.target.checked)}
+                  className="rounded border-line text-error focus:ring-error"
+                />
+                <span className="font-semibold text-ink">
+                  Also clear civic product analytics events ({civicEvents.length} events)
+                </span>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearModal(false)}
+                disabled={isClearingBackend}
+                className="px-4 py-2 rounded-xl border border-line bg-white hover:bg-canvas text-xs font-semibold text-ink"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClearBackend}
+                disabled={isClearingBackend}
+                className="px-4 py-2 rounded-xl bg-error hover:bg-error/90 text-white text-xs font-bold shadow-xs flex items-center gap-1.5"
+              >
+                {isClearingBackend ? (
+                  <span>Wiping Cloud Data...</span>
+                ) : (
+                  <span>Yes, Delete All Live Data</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
