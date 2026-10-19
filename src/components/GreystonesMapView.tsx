@@ -176,6 +176,11 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
         }
       }
 
+      const confirmationsBadge =
+        report.confirmations && report.confirmations > 1
+          ? `<span class="absolute -top-1.5 -right-1.5 bg-[#006948] text-white text-[10px] font-bold rounded-full px-1.5 py-0.5 border border-white shadow-xs z-10">×${report.confirmations}</span>`
+          : '';
+
       const pinHtml = `
         <div class="relative flex flex-col items-center select-none group">
           <div class="relative">
@@ -188,6 +193,7 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
                 : 'bg-white border-[#0b1c30]/30'
             } w-9 h-9 rounded-full border-2 shadow-md flex items-center justify-center text-lg transition-transform hover:scale-110">
               <span>${meta.emoji}</span>
+              ${confirmationsBadge}
             </div>
           </div>
         </div>

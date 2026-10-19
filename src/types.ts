@@ -30,6 +30,9 @@ export interface FoulingReport {
   photoDataUrl?: string;
   photoCaption?: string;
   isSeededDemo?: boolean;
+  mergedIntoId?: string;
+  lastConfirmedAt?: string;
+  additionalSubmitters?: string[];
 }
 
 export type BinKind = 'general' | 'dog_waste' | 'bag_dispenser' | 'recycling';
@@ -123,3 +126,93 @@ export interface GraphRunSummary {
   };
   n7Commit: { status: ReportStatus };
 }
+
+export type MapTimeRange = 'today' | 'week';
+
+export interface DailyFoulingSnapshot {
+  date: string; // YYYY-MM-DD
+  generatedAt: string; // ISO
+  totalReports: number;
+  distinctSubmitters: number;
+  highImpactCount: number;
+  nearBin15mCount: number;
+  nearBin50mCount: number;
+  nearBin50mPct: number;
+  topHotspots: { areaName: string; streetName: string; count: number }[];
+  reportIds: string[];
+}
+
+export interface WeeklyEvidenceSummary {
+  weekStart: string; // YYYY-MM-DD
+  weekEnd: string; // YYYY-MM-DD
+  totalReports: number;
+  distinctSubmitters: number;
+  todayCount: number;
+  highImpactCount: number;
+  nearBin50mPct: number;
+  dailyBreakdown: { date: string; dayLabel: string; count: number }[];
+  topHotspots: { areaName: string; streetName: string; count: number }[];
+}
+
+export type CivicEventType =
+  | 'email_council_mailto'
+  | 'email_council_copy'
+  | 'email_council_gmail'
+  | 'report_logged'
+  | 'report_corroborated'
+  | 'report_deleted';
+
+export interface CivicActionEvent {
+  id: string;
+  type: CivicEventType;
+  submitterToken: string;
+  timestamp: string; // ISO
+  appStream?: CivicAppStream;
+  metadata?: {
+    targetButton?: 'mailto' | 'copy' | 'gmail';
+    councillorCount?: number;
+    councillors?: string[];
+    templateId?: string;
+    templateLabel?: string;
+    subject?: string;
+    reportId?: string;
+    streetName?: string;
+    areaName?: string;
+    severity?: SeverityType;
+    nearestBinCode?: string;
+    userAgent?: string;
+  };
+}
+
+export interface ProductMetricsSummary {
+  dau: number; // Daily Active Users (last 24 hours)
+  wau: number; // Weekly Active Users (last 7 days)
+  mau: number; // Monthly Active Users (last 30 days)
+  totalUniqueTokens: number;
+  totalEmailClicks: number;
+  mailtoClicks: number;
+  copyClicks: number;
+  gmailClicks: number;
+  uniqueEmailSenders: number;
+  emailConversionRate: number; // % of total unique users who clicked email
+  totalPoosLogged: number;
+  avgPoosPerDay: number;
+  dailyPoos: {
+    date: string;
+    dayLabel: string;
+    count: number;
+    highImpactCount: number;
+    distinctSubmitters: number;
+  }[];
+  monthlyPoos: {
+    month: string;
+    monthLabel: string;
+    count: number;
+    distinctSubmitters: number;
+  }[];
+  emailLedger: CivicActionEvent[];
+  corroborationRate: number;
+  highImpactPct: number;
+  nearBin50mPct: number;
+}
+
