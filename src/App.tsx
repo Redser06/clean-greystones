@@ -230,6 +230,51 @@ export function App() {
     lat: 53.14431,
     lng: -6.06047,
   });
+
+  // User Device Geolocation State (HTML5 Geolocation API with permissions)
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [isLocating, setIsLocating] = useState<boolean>(false);
+  const [locationNotice, setLocationNotice] = useState<string | null>(null);
+
+  const requestUserLocation = () => {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setLocationNotice('Device geolocation is not supported in this browser.');
+      return;
+    }
+    setIsLocating(true);
+    setLocationNotice(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setIsLocating(false);
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lng = Number(pos.coords.longitude.toFixed(6));
+        setUserLocation({ lat, lng });
+        setDraftCoords({ lat, lng });
+      },
+      (err) => {
+        setIsLocating(false);
+        console.warn('Geolocation error:', err.message);
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocationNotice('Location permission denied. Using default Greystones map position.');
+        } else {
+          setLocationNotice('Could not retrieve device location. Using default map position.');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 60000,
+      }
+    );
+  };
+
+  // Automatically request device geolocation on initial load
+  useEffect(() => {
+    if (typeof window !== 'undefined' && navigator.geolocation) {
+      requestUserLocation();
+    }
+  }, []);
   const [selectedReport, setSelectedReport] = useState<FoulingReport | null>(null);
   const [lastLoggedReport, setLastLoggedReport] = useState<FoulingReport | null>(null);
 
@@ -704,24 +749,24 @@ ${residentSignOff || 'A concerned Greystones resident'}
       {/* Compact Professional Top Header */}
       <header className="bg-white border-b border-line z-40 shrink-0">
         <div className="flex justify-between items-center w-full px-3.5 py-2.5 max-w-screen-xl mx-auto">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"
               onClick={() => {
                 setHamburgerPage('none');
                 setActiveTab('map');
               }}
-              className="flex items-center gap-2 text-left"
+              className="flex items-center gap-2 text-left min-w-0"
             >
-              <div className="w-8 h-8 rounded-xl bg-primary text-white flex items-center justify-center shadow-xs">
+              <div className="w-8 h-8 rounded-xl bg-primary text-white flex items-center justify-center shadow-xs shrink-0">
                 <span className="text-base">💩</span>
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-display text-base sm:text-lg font-bold text-ink tracking-tight whitespace-nowrap">
                     Clean Greystones
                   </span>
-                  <span className="hidden sm:inline-block bg-canvas border border-line text-muted font-mono text-[10px] px-2 py-0.5 rounded-full font-semibold">
+                  <span className="hidden sm:inline-block bg-canvas border border-line text-muted font-mono text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0">
                     {submitterToken}
                   </span>
                 </div>
@@ -729,7 +774,53 @@ ${residentSignOff || 'A concerned Greystones resident'}
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Desktop Navigation Links (Kept on desktop, mobile uses bottom tab bar) */}
+            <nav className="hidden md:flex items-center gap-1 mr-1" aria-label="Desktop Primary Navigation">
+              <button
+                type="button"
+                onClick={() => {
+                  setHamburgerPage('none');
+                  setActiveTab('map');
+                }}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                  hamburgerPage === 'none' && activeTab === 'map'
+                    ? 'bg-primary text-white'
+                    : 'text-muted hover:bg-canvas hover:text-ink'
+                }`}
+              >
+                Map
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setHamburgerPage('none');
+                  setActiveTab('insights');
+                }}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                  hamburgerPage === 'none' && activeTab === 'insights'
+                    ? 'bg-primary text-white'
+                    : 'text-muted hover:bg-canvas hover:text-ink'
+                }`}
+              >
+                Insights
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setHamburgerPage('none');
+                  setActiveTab('council');
+                }}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                  hamburgerPage === 'none' && activeTab === 'council'
+                    ? 'bg-primary text-white'
+                    : 'text-muted hover:bg-canvas hover:text-ink'
+                }`}
+              >
+                Email Council
+              </button>
+            </nav>
+
             {/* Live Count Pill (Crowdsourced Communal Cloud) */}
             <button
               type="button"
@@ -753,25 +844,25 @@ ${residentSignOff || 'A concerned Greystones resident'}
               )}
             </button>
 
-            {/* PWA Direct Install Header Button (Only rendered when prompt is active & available per FIX-4) */}
+            {/* PWA Direct Install Header Button (Desktop/Tablet only; hidden on narrow mobile to prevent crowding) */}
             {!isStandalone && Boolean(deferredPrompt) && !hasDismissedInstall && (
               <button
                 type="button"
                 onClick={handlePromptInstall}
                 aria-label="Install Clean Greystones App"
-                className="flex items-center gap-1.5 bg-primary hover:bg-primary-container text-white px-2.5 py-1.5 rounded-full text-xs font-semibold shadow-xs transition-colors whitespace-nowrap shrink-0"
+                className="hidden sm:flex items-center gap-1.5 bg-primary hover:bg-primary-container text-white px-2.5 py-1.5 rounded-full text-xs font-semibold shadow-xs transition-colors whitespace-nowrap shrink-0"
               >
                 <span className="material-symbols-outlined text-[16px]">install_mobile</span>
                 <span>Install</span>
               </button>
             )}
 
-            {/* Hamburger Menu Button for Background Info (Bins & Stats, Legal & Bye-Laws, Watchdog, Demo/Prod Data) */}
+            {/* Hamburger Menu Button for Background Info */}
             <button
               type="button"
               onClick={() => setHamburgerOpen((v) => !v)}
               aria-label="Open background information menu"
-              className="w-9 h-9 rounded-xl border border-line bg-white hover:bg-canvas flex items-center justify-center text-ink active:scale-95 transition-transform"
+              className="w-10 h-10 min-w-[40px] rounded-xl border border-line bg-white hover:bg-canvas flex items-center justify-center text-ink active:scale-95 transition-transform shrink-0"
             >
               <span className="material-symbols-outlined text-[20px]">
                 {hamburgerOpen ? 'close' : 'menu'}
@@ -957,23 +1048,6 @@ ${residentSignOff || 'A concerned Greystones resident'}
                     </button>
                   </>
                 )}
-
-                <a
-                  href="https://greystones-roads.web.app"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
-                >
-                  <span className="text-base mt-0.5">🕳️</span>
-                  <div>
-                    <p className="text-sm font-semibold text-ink">
-                      Sister App: Fix Greystones Roads
-                    </p>
-                    <p className="text-xs text-muted">
-                      Switch to greystonesroads.ie (Pothole & Utility Trench Tracker) ↗
-                    </p>
-                  </div>
-                </a>
 
                 {/* BUG-5: Share Clean Greystones */}
                 <button
@@ -1305,7 +1379,30 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   draftCoords={draftCoords}
                   onMapClickDropPin={handleMapClickDropPin}
                   quickSeverity={selectedSeverity}
+                  userLocation={userLocation}
+                  isLocating={isLocating}
+                  onRequestLocation={requestUserLocation}
                 />
+
+                {/* Optional Location Notice Toast */}
+                {locationNotice && (
+                  <div className="absolute top-3 left-3 right-3 max-w-sm mx-auto z-30 pointer-events-auto">
+                    <div className="bg-white/95 backdrop-blur-md border border-amber-300 rounded-xl px-3 py-2 shadow-sm flex items-center justify-between gap-2 text-ink text-xs">
+                      <span className="flex items-center gap-1.5">
+                        <span>📍</span>
+                        <span>{locationNotice}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setLocationNotice(null)}
+                        className="text-muted hover:text-ink font-bold px-1.5 py-0.5 rounded"
+                        aria-label="Dismiss notice"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Clean Slate Live Mode Prompt when no reports logged yet (per BUG-3: dismissible + once per session) */}
                 {reports.length === 0 && !liveBannerDismissed && (
@@ -1478,11 +1575,11 @@ ${residentSignOff || 'A concerned Greystones resident'}
                           What did you spot?
                         </h3>
                         {/* FIX-2: Explicit pin-relative position and distance to bin */}
-                        <p className="text-xs text-muted truncate">
+                        <p className="text-xs text-muted truncate" title={`At the pin · ${draftContext.streetName} · ${draftContext.dBinAllM}m from ${draftContext.nearestAll.code}`}>
                           At the pin · {draftContext.streetName} · {draftContext.dBinAllM}m from {draftContext.nearestAll.code}
                         </p>
                         {/* FIX-2: Hint for relocating pin */}
-                        <p className="text-[11px] text-muted mt-0.5 truncate">
+                        <p className="text-[11px] text-muted mt-0.5 leading-snug">
                           Wrong spot? Close this and tap the map to move the pin.
                         </p>
                       </div>

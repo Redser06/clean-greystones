@@ -239,6 +239,13 @@ export function inferGreystonesLocation(lat: number, lng: number): {
       best = lm;
     }
   }
+  if (bestDist > 3000) {
+    return {
+      streetName: `Current Location (${lat.toFixed(4)}° N, ${Math.abs(lng).toFixed(4)}° W)`,
+      areaName: 'Current Location',
+      locationType: 'road',
+    };
+  }
   return {
     streetName: best.streetName,
     areaName: best.areaName,
