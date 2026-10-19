@@ -151,5 +151,27 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.ok(EMAIL_TEMPLATES[0].label.includes('Practical Solutions'));
     assert.ok(EMAIL_TEMPLATES[0].shortDesc.includes('2 wardens for Wicklow & Tánaiste'));
   });
+
+  it('supports accidental report deletion: removes report and updates hotspot metrics cleanly', () => {
+    const initialCount = INITIAL_REPORTS.length;
+    const toDeleteId = INITIAL_REPORTS[0].id;
+    const filteredReports = INITIAL_REPORTS.filter((r) => r.id !== toDeleteId);
+
+    assert.equal(filteredReports.length, initialCount - 1);
+    assert.equal(filteredReports.some((r) => r.id === toDeleteId), false);
+
+    const updatedAnalysis = computeBinsVsFoulingAnalysis(filteredReports);
+    assert.equal(updatedAnalysis.totalActiveReports, initialCount - 1);
+  });
+
+  it('validates unique report ID format for communal multi-device sync', () => {
+    const generateId = () => `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
+    const id1 = generateId();
+    const id2 = generateId();
+
+    assert.notEqual(id1, id2);
+    assert.match(id1, /^rep-[a-z0-9]+-[a-z0-9]+$/);
+    assert.match(id2, /^rep-[a-z0-9]+-[a-z0-9]+$/);
+  });
 });
 

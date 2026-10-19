@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Existing rules preserved: Forecasts - read-only for public, writes strictly authenticated
+    match /forecasts/{forecastId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // Existing rules preserved: Shared roadmap scenarios (TF4)
+    match /roadmaps/{roadmapId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['id', 'name', 'ticker', 'created_at', 'author', 'planned_features', 'baseline_financials', 'notes', 'metrics_summary'])
+        && request.resource.data.id is string
+        && request.resource.data.ticker is string
+        && request.resource.data.planned_features is list
+        && request.resource.data.created_at is string
+        && request.resource.data.planned_features.size() <= 50;
+      allow update, delete: if false;
+    }
+    
+    // Existing rules preserved: Leave-the-room scenario brief documents (TF4)
+    match /scenario_briefs/{briefId} {
+      allow read: if resource.data.published == true;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['id', 'published', 'payload', 'created_at'])
+        && request.resource.data.id is string
+        && request.resource.data.published == true
+        && request.resource.data.payload is map
+        && request.resource.data.created_at is string;
+      allow update, delete: if false;
+    }
+
+    // ProtoFleet Hub: Serverless Multi-Agent Registry & Telemetry
+    match /protofleet_state/{docId} {
+      allow read, write: if true;
+    }
+
+    match /protofleet_deployments/{slug} {
+      allow read, write: if true;
+    }
+
+    match /protofleet_events/{eventId} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+
+    // Clean Greystones: Crowdsourced Civic Dog Fouling Reports
+    match /clean_greystones_reports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // Fix Greystones Roads: Crowdsourced Sister App Hazard Reports
+    match /greystones_roads_reports/{reportId} {
+      allow read, write: if true;
+    }
+  }
+}

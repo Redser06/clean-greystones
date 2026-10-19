@@ -26,6 +26,14 @@ import {
 } from './utils/graphEngine';
 import { GreystonesMapView } from './components/GreystonesMapView';
 import { AdminBackendView } from './components/AdminBackendView';
+import {
+  subscribeToCrowdsourcedReports,
+  syncReportToCloud,
+  deleteReportFromCloud,
+  incrementConfirmationInCloud,
+  clearReportsFromCloud,
+  seedDemoReportsToCloud,
+} from './utils/firebaseSync';
 
 type BottomNavTab = 'map' | 'insights' | 'council';
 type HamburgerPage = 'none' | 'bins_stats' | 'legal_bylaws' | 'watchdog' | 'data_admin';
@@ -73,6 +81,7 @@ export function App() {
   const [hamburgerOpen, setHamburgerOpen] = useState<boolean>(false);
   const [hamburgerPage, setHamburgerPage] = useState<HamburgerPage>('none');
 
+  // Real-time Crowdsourced Reports from Communal Cloud Backend (with local storage cache)
   const [reports, setReports] = useState<FoulingReport[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
@@ -84,10 +93,29 @@ export function App() {
     } catch (err) {
       console.warn('Failed to parse stored reports', err);
     }
-    // Live production default: clean slate (demo data turned off)
     return [];
   });
 
+  const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(true);
+  const [confirmDeleteReportId, setConfirmDeleteReportId] = useState<string | null>(null);
+
+  // Subscribe to real-time communal updates across all browsers and devices
+  useEffect(() => {
+    const unsubscribe = subscribeToCrowdsourcedReports(
+      (cloudReports) => {
+        setReports(cloudReports);
+        setIsCloudSyncing(false);
+      },
+      (err) => {
+        console.warn('Communal sync unavailable, using cached local reports:', err);
+        setIsCloudSyncing(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Keep local storage offline cache synchronized
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -213,8 +241,9 @@ export function App() {
     const nearest = findNearestBins(lat, lng, bins);
     const h3Cell = computeGreystonesCell(lat, lng);
 
+    const uniqueId = `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
     const newReport: FoulingReport = {
-      id: `rep-${143 + reports.length}`,
+      id: uniqueId,
       createdAt: new Date().toISOString(),
       lat,
       lng,
@@ -239,6 +268,11 @@ export function App() {
     setOptionalNote('');
     setOptionalPhotoPreview(null);
     setNoteWarnings([]);
+
+    // Sync immediately to communal cloud backend so other browsers/devices see it in real time
+    syncReportToCloud(newReport).catch((err) => {
+      console.warn('Could not sync new report to communal cloud:', err);
+    });
   };
 
   const handleMapClickDropPin = (lat: number, lng: number) => {
@@ -250,10 +284,14 @@ export function App() {
   const handleSeverityChange = (sev: SeverityType) => {
     setSelectedSeverity(sev);
     if (lastLoggedReport) {
+      const updated = { ...lastLoggedReport, severity: sev };
       setReports((prev) =>
-        prev.map((r) => (r.id === lastLoggedReport.id ? { ...r, severity: sev } : r))
+        prev.map((r) => (r.id === lastLoggedReport.id ? updated : r))
       );
-      setLastLoggedReport((prev) => (prev ? { ...prev, severity: sev } : null));
+      setLastLoggedReport(updated);
+      syncReportToCloud(updated).catch((err) => {
+        console.warn('Could not sync severity update to cloud:', err);
+      });
     }
   };
 
@@ -270,29 +308,22 @@ export function App() {
     }
     setNoteWarnings([]);
 
+    const updated: FoulingReport = {
+      ...lastLoggedReport,
+      note: optionalNote.trim() || lastLoggedReport.note,
+      hasPhoto: Boolean(optionalPhotoPreview) || lastLoggedReport.hasPhoto,
+      photoDataUrl: optionalPhotoPreview ?? lastLoggedReport.photoDataUrl,
+    };
+
     setReports((prev) =>
-      prev.map((r) =>
-        r.id === lastLoggedReport.id
-          ? {
-              ...r,
-              note: optionalNote.trim() || r.note,
-              hasPhoto: Boolean(optionalPhotoPreview) || r.hasPhoto,
-              photoDataUrl: optionalPhotoPreview ?? r.photoDataUrl,
-            }
-          : r
-      )
+      prev.map((r) => (r.id === lastLoggedReport.id ? updated : r))
     );
-    setLastLoggedReport((prev) =>
-      prev
-        ? {
-            ...prev,
-            note: optionalNote.trim() || prev.note,
-            hasPhoto: Boolean(optionalPhotoPreview) || prev.hasPhoto,
-            photoDataUrl: optionalPhotoPreview ?? prev.photoDataUrl,
-          }
-        : null
-    );
+    setLastLoggedReport(updated);
     setExpandOptionalReportModal(false);
+
+    syncReportToCloud(updated).catch((err) => {
+      console.warn('Could not sync report details to cloud:', err);
+    });
   };
 
   const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -309,42 +340,69 @@ export function App() {
 
   const handleUndoLastDrop = () => {
     if (!lastLoggedReport) return;
-    setReports((prev) => prev.filter((r) => r.id !== lastLoggedReport.id));
+    const reportId = lastLoggedReport.id;
+    setReports((prev) => prev.filter((r) => r.id !== reportId));
     setLastLoggedReport(null);
     setSelectedReport(null);
     setExpandOptionalReportModal(false);
+
+    deleteReportFromCloud(reportId).catch((err) => {
+      console.warn('Could not undo report in cloud:', err);
+    });
   };
 
   const handleConfirmExistingReport = (reportId: string) => {
+    const target = reports.find((r) => r.id === reportId);
+    const nextCount = (target?.confirmations ?? 1) + 1;
+
     setReports((prev) =>
       prev.map((r) =>
-        r.id === reportId ? { ...r, confirmations: r.confirmations + 1 } : r
+        r.id === reportId ? { ...r, confirmations: nextCount } : r
       )
     );
     if (selectedReport?.id === reportId) {
       setSelectedReport((prev) =>
-        prev ? { ...prev, confirmations: prev.confirmations + 1 } : null
+        prev ? { ...prev, confirmations: nextCount } : null
       );
     }
+
+    incrementConfirmationInCloud(reportId, nextCount).catch((err) => {
+      console.warn('Could not sync confirmation count to cloud:', err);
+    });
   };
 
   // Demo vs Production Seed Management
   const handleClearSeededDemoData = () => {
+    const demoIds = reports.filter((r) => r.isSeededDemo).map((r) => r.id);
     setReports((prev) => prev.filter((r) => !r.isSeededDemo));
     setSelectedReport(null);
     setLastLoggedReport(null);
+    setConfirmDeleteReportId(null);
+
+    clearReportsFromCloud(demoIds).catch((err) => {
+      console.warn('Could not clear demo seeds from cloud:', err);
+    });
   };
 
   const handleClearAllReports = () => {
+    const allIds = reports.map((r) => r.id);
     setReports([]);
     setSelectedReport(null);
     setLastLoggedReport(null);
+    setConfirmDeleteReportId(null);
+
+    clearReportsFromCloud(allIds).catch((err) => {
+      console.warn('Could not clear reports from cloud:', err);
+    });
   };
 
   const handleRestoreSeededDemoData = () => {
-    setReports((prev) => {
-      const userLogged = prev.filter((r) => !r.isSeededDemo);
-      return [...userLogged, ...INITIAL_REPORTS];
+    const userLogged = reports.filter((r) => !r.isSeededDemo);
+    const combined = [...userLogged, ...INITIAL_REPORTS];
+    setReports(combined);
+
+    seedDemoReportsToCloud(INITIAL_REPORTS).catch((err) => {
+      console.warn('Could not seed demo reports to cloud:', err);
     });
   };
 
@@ -510,6 +568,11 @@ ${residentSignOff || 'A concerned Greystones resident'}
     setReports((prev) => prev.filter((r) => r.id !== reportId));
     if (selectedReport?.id === reportId) setSelectedReport(null);
     if (lastLoggedReport?.id === reportId) setLastLoggedReport(null);
+    setConfirmDeleteReportId(null);
+
+    deleteReportFromCloud(reportId).catch((err) => {
+      console.warn('Could not delete report from cloud:', err);
+    });
   };
 
   const handleToggleDemoSeedsFromAdmin = () => {
@@ -563,7 +626,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Live Count Pill */}
+            {/* Live Count Pill (Crowdsourced Communal Cloud) */}
             <button
               type="button"
               onClick={() => {
@@ -571,9 +634,10 @@ ${residentSignOff || 'A concerned Greystones resident'}
                 setActiveTab('insights');
               }}
               className="flex items-center gap-1.5 bg-canvas hover:bg-surface-container px-2.5 py-1.5 rounded-full border border-line text-xs font-semibold text-ink transition-colors"
+              title={isCloudSyncing ? 'Syncing with communal backend...' : 'Crowdsourced live data synced with communal cloud'}
             >
-              <span className="w-2 h-2 rounded-full bg-primary" />
-              <span>{analysis.totalActiveReports} logged</span>
+              <span className={`w-2 h-2 rounded-full ${isCloudSyncing ? 'bg-amber-500 animate-pulse' : 'bg-primary'}`} />
+              <span>{analysis.totalActiveReports} live</span>
               <span className="text-muted hidden sm:inline">
                 ({analysis.nearBin50mPct}% ≤50m bin)
               </span>
@@ -643,6 +707,22 @@ ${residentSignOff || 'A concerned Greystones resident'}
                 <p className="font-mono text-xs font-bold text-ink">{submitterToken}</p>
                 <p className="text-[11px] text-muted leading-snug">
                   Cryptographic checksum proves to the council that reports come from distinct real devices without collecting your name or email.
+                </p>
+              </div>
+
+              {/* Communal Cloud Sync Card */}
+              <div className="p-3 rounded-xl bg-canvas border border-line space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-muted uppercase tracking-wider">
+                    Crowdsourced Cloud Sync
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Live Backend
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted leading-snug">
+                  All observations are synced in real time with the communal database so every resident and browser sees the live town-wide map.
                 </p>
               </div>
 
@@ -1122,21 +1202,57 @@ ${residentSignOff || 'A concerned Greystones resident'}
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmExistingReport(selectedReport.id)}
-                          className="px-2.5 py-1 rounded-lg bg-canvas hover:bg-surface-container border border-line text-xs font-semibold text-ink"
-                        >
-                          👍 +1 ({selectedReport.confirmations})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedReport(null)}
-                          className="p-1 text-muted hover:text-ink text-xs"
-                          aria-label="Dismiss pin summary"
-                        >
-                          ✕
-                        </button>
+                        {confirmDeleteReportId === selectedReport.id ? (
+                          <div className="flex items-center gap-1 bg-red-50 p-1 rounded-xl border border-red-200">
+                            <span className="text-[10px] font-bold text-error">Delete?</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSingleReport(selectedReport.id)}
+                              className="px-2 py-1 rounded-lg bg-error text-white text-xs font-bold hover:bg-error/90 transition-colors"
+                            >
+                              Yes, Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteReportId(null)}
+                              className="px-1.5 py-1 rounded-lg bg-white text-muted text-xs font-medium hover:text-ink transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleConfirmExistingReport(selectedReport.id)}
+                              className="px-2.5 py-1.5 rounded-xl bg-canvas hover:bg-surface-container border border-line text-xs font-semibold text-ink transition-colors"
+                              title="Confirm you also saw this"
+                            >
+                              👍 +1 ({selectedReport.confirmations})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteReportId(selectedReport.id)}
+                              className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-error border border-red-200 text-xs font-semibold flex items-center gap-1 transition-colors"
+                              title="Delete accidental report"
+                              aria-label="Delete report"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">delete</span>
+                              <span>Delete</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedReport(null);
+                                setConfirmDeleteReportId(null);
+                              }}
+                              className="p-1 text-muted hover:text-ink text-xs"
+                              aria-label="Dismiss pin summary"
+                            >
+                              ✕
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
