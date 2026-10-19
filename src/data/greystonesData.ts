@@ -772,6 +772,12 @@ export const VERIFIED_CITATIONS: LegalCitation[] = [
 
 export const EMAIL_TEMPLATES: EmailTemplateOption[] = [
   {
+    id: 'practical_action',
+    label: 'Practical Solutions & Resources (Resident Call)',
+    shortDesc: 'Frustration over fouling, buggies/wheelchairs, 2 wardens for Wicklow & Tánaiste',
+    intent: 'enforcement',
+  },
+  {
     id: 'bin_mythbuster',
     label: 'Council Myth-Buster: Fouling Beside Bins',
     shortDesc: 'Cites exact % of fouling within 15m–50m of bins & demands warden enforcement',
