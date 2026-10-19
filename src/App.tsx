@@ -73,7 +73,88 @@ export function App() {
   const [hamburgerOpen, setHamburgerOpen] = useState<boolean>(false);
   const [hamburgerPage, setHamburgerPage] = useState<HamburgerPage>('none');
 
-  const [reports, setReports] = useState<FoulingReport[]>(INITIAL_REPORTS);
+  const [reports, setReports] = useState<FoulingReport[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const stored = localStorage.getItem('clean-greystones.reports.v1');
+      if (stored !== null) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (err) {
+      console.warn('Failed to parse stored reports', err);
+    }
+    // Live production default: clean slate (demo data turned off)
+    return [];
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('clean-greystones.reports.v1', JSON.stringify(reports));
+      } catch (err) {
+        console.warn('Failed to save reports to localStorage', err);
+      }
+    }
+  }, [reports]);
+
+  // PWA Standalone & Installation State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isStandalone, setIsStandalone] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true
+    );
+  });
+  const [showIosInstallModal, setShowIosInstallModal] = useState<boolean>(false);
+
+  const isIos = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const ua = window.navigator.userAgent.toLowerCase();
+    return /iphone|ipad|ipod/.test(ua);
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setIsStandalone(true);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handlePromptInstall = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      try {
+        const choice = await deferredPrompt.userChoice;
+        if (choice.outcome === 'accepted') {
+          setIsStandalone(true);
+        }
+      } catch {
+        // dismissed
+      }
+      setDeferredPrompt(null);
+    } else if (isIos) {
+      setShowIosInstallModal(true);
+    } else {
+      alert(
+        'To install Clean Greystones on your device:\n1. Tap your browser menu (⋮ or Share)\n2. Select "Add to Home screen" or "Install App"'
+      );
+    }
+  };
   const [bins] = useState<PublicBin[]>(INITIAL_PUBLIC_BINS);
 
   // Unique provable anonymous device token (no logins, no PII)
@@ -250,6 +331,12 @@ export function App() {
   // Demo vs Production Seed Management
   const handleClearSeededDemoData = () => {
     setReports((prev) => prev.filter((r) => !r.isSeededDemo));
+    setSelectedReport(null);
+    setLastLoggedReport(null);
+  };
+
+  const handleClearAllReports = () => {
+    setReports([]);
     setSelectedReport(null);
     setLastLoggedReport(null);
   };
@@ -492,6 +579,19 @@ ${residentSignOff || 'A concerned Greystones resident'}
               </span>
             </button>
 
+            {/* PWA Direct Install Header Button */}
+            {!isStandalone && (
+              <button
+                type="button"
+                onClick={handlePromptInstall}
+                aria-label="Install Clean Greystones App"
+                className="flex items-center gap-1.5 bg-primary hover:bg-primary-container text-white px-2.5 py-1.5 rounded-full text-xs font-semibold shadow-xs transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">install_mobile</span>
+                <span>Install</span>
+              </button>
+            )}
+
             {/* Hamburger Menu Button for Background Info (Bins & Stats, Legal & Bye-Laws, Watchdog, Demo/Prod Data) */}
             <button
               type="button"
@@ -545,6 +645,27 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   Cryptographic checksum proves to the council that reports come from distinct real devices without collecting your name or email.
                 </p>
               </div>
+
+              {/* PWA Home Screen Installation Card */}
+              {!isStandalone && (
+                <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 space-y-2">
+                  <div className="flex items-center gap-1.5 text-primary font-bold text-xs">
+                    <span className="material-symbols-outlined text-base">download_for_offline</span>
+                    <span>Install on Your Device</span>
+                  </div>
+                  <p className="text-[11px] text-muted leading-snug">
+                    Save to your home screen for quick offline access and 1-tap logging during walks.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handlePromptInstall}
+                    className="w-full py-2 px-3 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                  >
+                    <span className="material-symbols-outlined text-sm">install_mobile</span>
+                    <span>Install Clean Greystones</span>
+                  </button>
+                </div>
+              )}
 
               {/* Background Pages Navigation */}
               <nav className="space-y-1.5">
@@ -859,7 +980,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
                       {reports.filter((r) => !r.isSeededDemo).length} logged on this device
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {hasDemoSeeds ? (
                       <button
                         type="button"
@@ -875,6 +996,15 @@ ${residentSignOff || 'A concerned Greystones resident'}
                         className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-xs hover:opacity-95"
                       >
                         Restore 15 Demo Seeds
+                      </button>
+                    )}
+                    {reports.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearAllReports}
+                        className="px-3.5 py-2 rounded-xl border border-line bg-canvas hover:bg-surface-container text-xs font-semibold text-ink"
+                      >
+                        Clear All ({reports.length})
                       </button>
                     )}
                   </div>
@@ -957,6 +1087,21 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   onMapClickDropPin={handleMapClickDropPin}
                   quickSeverity={selectedSeverity}
                 />
+
+                {/* Clean Slate Live Mode Prompt when no reports logged yet */}
+                {reports.length === 0 && (
+                  <div className="absolute top-3 left-3 right-3 max-w-sm mx-auto z-30 pointer-events-none">
+                    <div className="bg-white/95 backdrop-blur-md border border-primary/30 rounded-2xl p-3 shadow-lg flex items-center gap-2.5 text-ink">
+                      <span className="text-xl">📍</span>
+                      <div className="text-xs">
+                        <p className="font-bold text-primary">Live Mode Active · Clean Slate</p>
+                        <p className="text-muted text-[11px]">
+                          Tap anywhere on the Greystones map to log your first live observation.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Compact Non-Obscuring Single-Line Pill when an Existing Pin is Tapped */}
                 {selectedReport && !lastLoggedReport && (
@@ -1580,6 +1725,58 @@ ${residentSignOff || 'A concerned Greystones resident'}
           <span>Email Council</span>
         </button>
       </nav>
+
+      {/* iOS Safari Install Guide Modal */}
+      {showIosInstallModal && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/40 backdrop-blur-xs p-3 sm:p-4">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-line shadow-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">📱</span>
+                <div>
+                  <h3 className="font-display text-base font-bold text-ink">
+                    Install on iPhone / iPad
+                  </h3>
+                  <p className="text-xs text-muted">Add to Home Screen via Safari</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowIosInstallModal(false)}
+                className="w-8 h-8 rounded-lg hover:bg-canvas text-muted flex items-center justify-center text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <ol className="space-y-3 text-xs text-ink list-decimal list-inside bg-canvas p-3.5 rounded-xl border border-line">
+              <li className="leading-relaxed">
+                Tap the <strong>Share</strong> button (
+                <span className="inline-block px-1 font-mono text-[11px] bg-white border border-line rounded">
+                  ⎋ / [↑]
+                </span>
+                ) in Safari's bottom toolbar.
+              </li>
+              <li className="leading-relaxed">
+                Scroll down and select <strong>Add to Home Screen</strong> (
+                <span className="font-semibold text-primary">＋</span>
+                ).
+              </li>
+              <li className="leading-relaxed">
+                Tap <strong>Add</strong> in the top-right corner. Clean Greystones will launch as a fast standalone app with offline caching!
+              </li>
+            </ol>
+
+            <button
+              type="button"
+              onClick={() => setShowIosInstallModal(false)}
+              className="w-full py-2.5 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-semibold shadow-xs"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
