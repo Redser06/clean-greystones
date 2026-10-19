@@ -201,6 +201,28 @@ export function App() {
   const [selectedReport, setSelectedReport] = useState<FoulingReport | null>(null);
   const [lastLoggedReport, setLastLoggedReport] = useState<FoulingReport | null>(null);
 
+  // BUG-1 & BUG-3: Type Chooser Bottom Sheet & Live Banner Session State
+  const [isTypeChooserOpen, setIsTypeChooserOpen] = useState<boolean>(false);
+  const [liveBannerDismissed, setLiveBannerDismissed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return sessionStorage.getItem('clean-greystones.dismissed-live-banner') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const dismissLiveBanner = () => {
+    setLiveBannerDismissed(true);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('clean-greystones.dismissed-live-banner', 'true');
+      } catch {
+        // ignore storage errors
+      }
+    }
+  };
+
   // Optional Extra Step Modal ("Add details / photo") after 1-Tap log
   const [expandOptionalReportModal, setExpandOptionalReportModal] = useState<boolean>(false);
   const [optionalNote, setOptionalNote] = useState<string>('');
@@ -268,6 +290,7 @@ export function App() {
     setOptionalNote('');
     setOptionalPhotoPreview(null);
     setNoteWarnings([]);
+    dismissLiveBanner();
 
     // Sync immediately to communal cloud backend so other browsers/devices see it in real time
     syncReportToCloud(newReport).catch((err) => {
@@ -275,25 +298,43 @@ export function App() {
     });
   };
 
+  // BUG-1: On map click or drag, record draft coords and open Type Chooser sheet
   const handleMapClickDropPin = (lat: number, lng: number) => {
     setDraftCoords({ lat, lng });
-    logReportImmediately(lat, lng, selectedSeverity);
+    setIsTypeChooserOpen(true);
   };
 
-  // Update the just-logged report when the user changes severity chip or attaches optional note/photo
-  const handleSeverityChange = (sev: SeverityType) => {
+  // BUG-1: One type decision per log
+  const handleSelectSeverityAndLog = (sev: SeverityType) => {
     setSelectedSeverity(sev);
-    if (lastLoggedReport) {
-      const updated = { ...lastLoggedReport, severity: sev };
-      setReports((prev) =>
-        prev.map((r) => (r.id === lastLoggedReport.id ? updated : r))
-      );
-      setLastLoggedReport(updated);
-      syncReportToCloud(updated).catch((err) => {
-        console.warn('Could not sync severity update to cloud:', err);
-      });
+    setIsTypeChooserOpen(false);
+    logReportImmediately(draftCoords.lat, draftCoords.lng, sev);
+  };
+
+  // BUG-5: Share Clean Greystones with neighbours / community
+  const handleShareApp = async () => {
+    const shareData = {
+      title: 'Clean Greystones',
+      text: 'Track and report dog fouling in Greystones to hold our council accountable and keep our footpaths clean.',
+      url: 'https://cleangreystones.ie',
+    };
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch {
+        // User cancelled share
+      }
+    } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText('https://cleangreystones.ie');
+        alert('Link copied to clipboard: https://cleangreystones.ie');
+      } catch {
+        // clipboard unavailable
+      }
     }
   };
+
+
 
   const handleSaveOptionalDetails = (e: React.FormEvent) => {
     e.preventDefault();
@@ -637,10 +678,16 @@ ${residentSignOff || 'A concerned Greystones resident'}
               title={isCloudSyncing ? 'Syncing with communal backend...' : 'Crowdsourced live data synced with communal cloud'}
             >
               <span className={`w-2 h-2 rounded-full ${isCloudSyncing ? 'bg-amber-500 animate-pulse' : 'bg-primary'}`} />
-              <span>{analysis.totalActiveReports} live</span>
-              <span className="text-muted hidden sm:inline">
-                ({analysis.nearBin50mPct}% ≤50m bin)
-              </span>
+              {analysis.totalActiveReports > 0 ? (
+                <>
+                  <span>{analysis.totalActiveReports} live</span>
+                  <span className="text-muted hidden sm:inline">
+                    ({analysis.nearBin50mPct}% ≤50m bin)
+                  </span>
+                </>
+              ) : (
+                <span className="text-muted font-medium">Live Map</span>
+              )}
             </button>
 
             {/* PWA Direct Install Header Button */}
@@ -858,6 +905,23 @@ ${residentSignOff || 'A concerned Greystones resident'}
                     </p>
                   </div>
                 </a>
+
+                {/* BUG-5: Share Clean Greystones */}
+                <button
+                  type="button"
+                  onClick={handleShareApp}
+                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-primary mt-0.5">share</span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">
+                      Share Clean Greystones
+                    </p>
+                    <p className="text-xs text-muted">
+                      Share cleangreystones.ie with neighbours, dog owners, and resident associations
+                    </p>
+                  </div>
+                </button>
               </nav>
             </div>
 
@@ -1100,59 +1164,65 @@ ${residentSignOff || 'A concerned Greystones resident'}
         <>
           {/* TAB 1: MAP IS THE HERO (Quick 1-Tap to Mark + Optional Extra Detail Step) */}
           {activeTab === 'map' && (
-            <div className="flex-1 flex flex-col overflow-hidden relative">
-              {/* Clean Slim Filter Bar */}
-              <section className="bg-white/95 backdrop-blur-sm px-3 py-1.5 z-20 border-b border-line flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setMapFilter('all')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
-                      mapFilter === 'all'
-                        ? 'bg-ink text-white'
-                        : 'bg-canvas text-muted border border-line'
-                    }`}
-                  >
-                    All ({analysis.totalActiveReports})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMapFilter('near_bins')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
-                      mapFilter === 'near_bins'
-                        ? 'bg-primary text-white'
-                        : 'bg-canvas text-muted border border-line'
-                    }`}
-                  >
-                    ≤25m from Bin ({analysis.nearBin15mCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMapFilter('wheels')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
-                      mapFilter === 'wheels'
-                        ? 'bg-error text-white'
-                        : 'bg-canvas text-muted border border-line'
-                    }`}
-                  >
-                    ♿ 👶 Wheels (
-                    {analysis.bySeverity.buggy_wheels.count +
-                      analysis.bySeverity.wheelchair_wheels.count}
-                    )
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMapFilter('stepped_in')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
-                      mapFilter === 'stepped_in'
-                        ? 'bg-error text-white'
-                        : 'bg-canvas text-muted border border-line'
-                    }`}
-                  >
-                    👟 Stepped In ({analysis.bySeverity.stepped_in.count})
-                  </button>
-                </div>
-              </section>
+            <div
+              className="flex-1 flex flex-col overflow-hidden relative"
+              data-agent-surface="map"
+              data-agent-state={reports.length === 0 ? 'empty' : mapFilter !== 'all' ? 'filtering' : 'live'}
+            >
+              {/* Clean Slim Filter Bar (Only shown when live reports exist per BUG-2) */}
+              {reports.length > 0 && (
+                <section className="bg-white/95 backdrop-blur-sm px-3 py-1.5 z-20 border-b border-line flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setMapFilter('all')}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                        mapFilter === 'all'
+                          ? 'bg-ink text-white'
+                          : 'bg-canvas text-muted border border-line'
+                      }`}
+                    >
+                      All ({analysis.totalActiveReports})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMapFilter('near_bins')}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                        mapFilter === 'near_bins'
+                          ? 'bg-primary text-white'
+                          : 'bg-canvas text-muted border border-line'
+                      }`}
+                    >
+                      ≤25m from Bin ({analysis.nearBin15mCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMapFilter('wheels')}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                        mapFilter === 'wheels'
+                          ? 'bg-error text-white'
+                          : 'bg-canvas text-muted border border-line'
+                      }`}
+                    >
+                      ♿ 👶 Wheels (
+                      {analysis.bySeverity.buggy_wheels.count +
+                        analysis.bySeverity.wheelchair_wheels.count}
+                      )
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMapFilter('stepped_in')}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
+                        mapFilter === 'stepped_in'
+                          ? 'bg-error text-white'
+                          : 'bg-canvas text-muted border border-line'
+                      }`}
+                    >
+                      👟 Stepped In ({analysis.bySeverity.stepped_in.count})
+                    </button>
+                  </div>
+                </section>
+              )}
 
               {/* Map Viewport */}
               <div className="relative flex-1 flex flex-col overflow-hidden">
@@ -1168,17 +1238,27 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   quickSeverity={selectedSeverity}
                 />
 
-                {/* Clean Slate Live Mode Prompt when no reports logged yet */}
-                {reports.length === 0 && (
-                  <div className="absolute top-3 left-3 right-3 max-w-sm mx-auto z-30 pointer-events-none">
-                    <div className="bg-white/95 backdrop-blur-md border border-primary/30 rounded-2xl p-3 shadow-lg flex items-center gap-2.5 text-ink">
-                      <span className="text-xl">📍</span>
-                      <div className="text-xs">
-                        <p className="font-bold text-primary">Live Mode Active · Clean Slate</p>
-                        <p className="text-muted text-[11px]">
-                          Tap anywhere on the Greystones map to log your first live observation.
-                        </p>
+                {/* Clean Slate Live Mode Prompt when no reports logged yet (per BUG-3: dismissible + once per session) */}
+                {reports.length === 0 && !liveBannerDismissed && (
+                  <div className="absolute top-3 left-3 right-3 max-w-sm mx-auto z-30 pointer-events-auto">
+                    <div className="bg-white/95 backdrop-blur-md border border-primary/30 rounded-2xl p-3 shadow-lg flex items-center justify-between gap-2.5 text-ink">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="text-xl shrink-0">📍</span>
+                        <div className="text-xs min-w-0">
+                          <p className="font-bold text-primary">Live Mode Active · Clean Slate</p>
+                          <p className="text-muted text-[11px]">
+                            Tap anywhere on the Greystones map to log your first live observation.
+                          </p>
+                        </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={dismissLiveBanner}
+                        aria-label="Dismiss banner"
+                        className="p-1 rounded-full text-muted hover:text-ink hover:bg-canvas transition-colors shrink-0"
+                      >
+                        <span className="material-symbols-outlined text-base">close</span>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -1290,54 +1370,80 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   </div>
                 )}
 
-                {/* Bottom Hero Control Dock: 4 Emoji Pills + 1-Tap Button */}
+                {/* Bottom Hero Control Dock: Single Primary Log Action (per BUG-1 & BUG-6) */}
                 <div className="z-30 bg-white border-t border-line px-3 pt-2.5 pb-16 shrink-0">
-                  <div className="max-w-md mx-auto space-y-2">
-                    <div
-                      role="group"
-                      aria-label="Select fouling impact"
-                      className="grid grid-cols-4 gap-1.5"
-                    >
-                      {(Object.keys(SEVERITY_META) as SeverityType[]).map((sevKey) => {
-                        const meta = SEVERITY_META[sevKey];
-                        const active = selectedSeverity === sevKey;
-                        return (
-                          <button
-                            key={sevKey}
-                            type="button"
-                            onClick={() => handleSeverityChange(sevKey)}
-                            className={`py-1.5 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 border transition-all active:scale-95 ${
-                              active
-                                ? 'bg-primary text-white border-primary shadow-xs'
-                                : 'bg-canvas text-ink border-line hover:bg-surface-container'
-                            }`}
-                          >
-                            <span className="text-sm">{meta.emoji}</span>
-                            <span className="truncate">{meta.shortLabel}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
+                  <div className="max-w-md mx-auto">
                     <button
                       type="button"
-                      onClick={() =>
-                        logReportImmediately(
-                          draftCoords.lat,
-                          draftCoords.lng,
-                          selectedSeverity
-                        )
-                      }
+                      data-agent-action="log-observation"
+                      onClick={() => setIsTypeChooserOpen(true)}
+                      aria-label="Log dog fouling observation"
                       className="w-full h-12 bg-primary hover:bg-primary-container text-white rounded-2xl font-display text-sm font-bold shadow-sm active:scale-[0.99] transition-all flex items-center justify-center gap-2"
                     >
-                      <span className="text-lg">{SEVERITY_META[selectedSeverity].emoji}</span>
-                      <span>
-                        Mark {SEVERITY_META[selectedSeverity].shortLabel} Here (or Tap Map)
-                      </span>
+                      <span className="text-lg">💩</span>
+                      <span>Log Dog Fouling</span>
                     </button>
                   </div>
                 </div>
               </div>
+
+              {/* BUG-1: Type Chooser Bottom Sheet / Modal (One Type Decision per Log) */}
+              {isTypeChooserOpen && (
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Choose fouling impact"
+                  className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/40 backdrop-blur-xs p-0 sm:p-4"
+                  onClick={(e) => {
+                    if (e.target === e.currentTarget) setIsTypeChooserOpen(false);
+                  }}
+                >
+                  <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-2xl border border-line shadow-2xl p-5 space-y-4 animate-in slide-in-from-bottom duration-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-primary">
+                          Log Observation
+                        </span>
+                        <h3 className="font-display text-base font-bold text-ink">
+                          What did you spot?
+                        </h3>
+                        <p className="text-xs text-muted truncate">
+                          {draftContext.streetName} · {draftContext.dBinAllM}m from {draftContext.nearestAll.code}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsTypeChooserOpen(false)}
+                        aria-label="Close type selection"
+                        className="w-8 h-8 rounded-lg hover:bg-canvas text-muted flex items-center justify-center transition-colors"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {(Object.keys(SEVERITY_META) as SeverityType[]).map((sevKey) => {
+                        const meta = SEVERITY_META[sevKey];
+                        return (
+                          <button
+                            key={sevKey}
+                            type="button"
+                            onClick={() => handleSelectSeverityAndLog(sevKey)}
+                            aria-label={`Log ${meta.label}: ${meta.subtext}`}
+                            className="w-full p-3.5 rounded-2xl border border-line hover:border-primary bg-canvas hover:bg-white text-left flex items-start gap-3.5 transition-all active:scale-[0.99]"
+                          >
+                            <span className="text-2xl mt-0.5 select-none">{meta.emoji}</span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-ink">{meta.label}</p>
+                              <p className="text-xs text-muted leading-snug">{meta.subtext}</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* OPTIONAL EXTRA STEP MODAL: Add Photo & Note after 1-Tap Drop */}
               {expandOptionalReportModal && lastLoggedReport && (

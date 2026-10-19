@@ -8,6 +8,7 @@ import {
   haversineDistanceMeters,
   isValidSubmitterToken,
   selectVerifiedCitations,
+  SEVERITY_META,
 } from '../utils/graphEngine';
 import {
   computeTemporalAndSeasonalModel,
@@ -172,6 +173,18 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.notEqual(id1, id2);
     assert.match(id1, /^rep-[a-z0-9]+-[a-z0-9]+$/);
     assert.match(id2, /^rep-[a-z0-9]+-[a-z0-9]+$/);
+  });
+
+  it('provides complete accessible metadata without mid-word ellipsis for all 4 fouling types', () => {
+    const types = ['just_poop', 'stepped_in', 'buggy_wheels', 'wheelchair_wheels'] as const;
+    for (const t of types) {
+      const meta = SEVERITY_META[t];
+      assert.ok(meta.emoji && meta.emoji.length > 0);
+      assert.ok(meta.label && meta.label.length > 0);
+      assert.ok(meta.subtext && meta.subtext.length > 0);
+      assert.ok(!meta.label.includes('...'), 'Label must not contain ellipsis');
+      assert.ok(!meta.shortLabel.includes('...'), 'Short label must not contain ellipsis');
+    }
   });
 });
 
