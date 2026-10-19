@@ -20,6 +20,7 @@ import {
   verifyAdminPasscode,
 } from '../utils/adminAnalytics';
 import {
+  EMAIL_TEMPLATES,
   GREYSTONES_COUNCILLORS,
   INITIAL_PUBLIC_BINS,
   INITIAL_REPORTS,
@@ -143,6 +144,12 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.equal(lines.length, INITIAL_REPORTS.length + 1);
     assert.ok(lines[0].includes('id,app_stream,created_at_utc'));
     assert.ok(lines[0].includes('submitter_token,token_checksum_valid'));
+  });
+
+  it('configures practical_action as the default primary councillor email template', () => {
+    assert.equal(EMAIL_TEMPLATES[0].id, 'practical_action');
+    assert.ok(EMAIL_TEMPLATES[0].label.includes('Practical Solutions'));
+    assert.ok(EMAIL_TEMPLATES[0].shortDesc.includes('2 wardens for Wicklow & Tánaiste'));
   });
 });
 

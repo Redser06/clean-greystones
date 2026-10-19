@@ -94,6 +94,7 @@ export interface HansardRecord {
 }
 
 export type EmailTemplateId =
+  | 'practical_action'
   | 'hotspot_evidence'
   | 'bin_mythbuster'
   | 'wheel_contamination'

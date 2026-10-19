@@ -106,8 +106,9 @@ export function App() {
   const [selectedCcIds, setSelectedCcIds] = useState<string[]>(
     COUNCIL_CC_CONTACTS.filter((c) => c.defaultChecked).map((c) => c.id)
   );
-  const [selectedTemplateId, setSelectedTemplateId] = useState<EmailTemplateId>('bin_mythbuster');
-  const [residentSignOff, setResidentSignOff] = useState<string>('A Greystones resident');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<EmailTemplateId>('practical_action');
+  const [residentSignOff, setResidentSignOff] = useState<string>('A concerned Greystones resident');
+  const [includeLiveEvidenceStats, setIncludeLiveEvidenceStats] = useState<boolean>(false);
   const [emailCopiedToast, setEmailCopiedToast] = useState<string>('');
   const [emailsPreparedCount, setEmailsPreparedCount] = useState<number>(42);
 
@@ -287,34 +288,61 @@ export function App() {
     const topHotspot = analysis.nearBinHotspots[0]?.areaName ?? 'South Beach Promenade';
     const focusReport = selectedReport ?? lastLoggedReport ?? reports[0];
 
-    let subject = `Dog Fouling in Greystones — ${analysis.totalActiveReports} Mapped Reports (${analysis.nearBin50mPct}% Within 50m of a Bin)`;
-    let introParagraph = `I am writing as a resident of Greystones, Co. Wicklow to raise urgent frustration over the volume and frequency of dog fouling across our footpaths, seafront promenade, and public spaces.`;
+    let subject = 'Dog Fouling in Greystones — Need for Practical Solutions and Resources';
+    let body = '';
 
-    if (selectedTemplateId === 'bin_mythbuster') {
-      subject = `Greystones Dog Fouling Evidence: ${analysis.nearBin50mPct}% of Mapped Fouling Occurs Within 50m of a Public Bin`;
-      introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${analysis.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
-    } else if (selectedTemplateId === 'wheel_contamination') {
-      subject = `Footpath Accessibility Hazard: ${analysis.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
-      introParagraph = `Residents have logged ${analysis.totalActiveReports} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
-    } else if (selectedTemplateId === 'request_bin') {
-      subject = `Request for Dog-Waste Bins on Unserved Greystones Walking Routes (>200m from any bin)`;
-      introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit shows 0 dedicated dog-waste bins in the town and >200m bin gaps on outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
-    }
+    if (selectedTemplateId === 'practical_action') {
+      subject = 'Dog Fouling in Greystones — Need for Practical Solutions and Resources';
+      body = `Dear Councillor,
 
-    const latestFocusBlock = focusReport
-      ? `Logged Incident Reference (${focusReport.id.toUpperCase()} · Submitter ${focusReport.submitterToken}):
+I’m writing to express my frustration at the unacceptable amount of dog fouling in public spaces across Greystones.
+
+It’s disgusting, unhygienic and particularly problematic for parents with buggies and wheelchair users, who regularly end up with dog waste caught in their wheels and brought into their homes. Families should be able to enjoy our local area without constantly having to watch where they step.
+
+With reportedly only two dog wardens covering the whole of Wicklow, it’s clear that more resources and practical solutions are needed.
+
+We would like to see Wicklow County Council take meaningful action, whether through increased enforcement, additional dog waste bins, targeted patrols or community initiatives to tackle the problem.
+
+With the Tánaiste also living locally, I would hope this issue receives the attention it deserves.
+
+Residents should be able to enjoy clean, safe and accessible public spaces without constantly having to dodge dog waste. We need practical solutions, not simply more warning signs.
+
+Kind regards,
+
+${residentSignOff || 'A concerned Greystones resident'}`;
+
+      if (includeLiveEvidenceStats) {
+        body += `\n\n---\nLive Greystones Map Evidence (cleangreystones.ie):\n• Active Mapped Reports: ${analysis.totalActiveReports} incidents\n• Direct Wheel & Footwear Contaminations: ${analysis.highImpactCount}\n• Primary Hotspot Beside Bins: ${topHotspot}`;
+      }
+    } else {
+      let introParagraph = `I am writing as a resident of Greystones, Co. Wicklow to raise urgent frustration over the volume and frequency of dog fouling across our footpaths, seafront promenade, and public spaces.`;
+      subject = `Dog Fouling in Greystones — ${analysis.totalActiveReports} Mapped Reports (${analysis.nearBin50mPct}% Within 50m of a Bin)`;
+
+      if (selectedTemplateId === 'bin_mythbuster') {
+        subject = `Greystones Dog Fouling Evidence: ${analysis.nearBin50mPct}% of Mapped Fouling Occurs Within 50m of a Public Bin`;
+        introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${analysis.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
+      } else if (selectedTemplateId === 'wheel_contamination') {
+        subject = `Footpath Accessibility Hazard: ${analysis.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
+        introParagraph = `Residents have logged ${analysis.totalActiveReports} dog fouling incidents across Greystones (${analysis.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
+      } else if (selectedTemplateId === 'request_bin') {
+        subject = `Request for Dog-Waste Bins on Unserved Greystones Walking Routes (>200m from any bin)`;
+        introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit shows 0 dedicated dog-waste bins in the town and >200m bin gaps on outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
+      }
+
+      const latestFocusBlock = focusReport
+        ? `Logged Incident Reference (${focusReport.id.toUpperCase()} · Submitter ${focusReport.submitterToken}):
 • Location: ${focusReport.streetName} (${focusReport.lat.toFixed(4)}° N, ${Math.abs(focusReport.lng).toFixed(4)}° W)
 • Impact: ${SEVERITY_META[focusReport.severity].label}
 • Distance to Nearest Public Bin: ${focusReport.dBinAllM} metres (${focusReport.nearestBinCode})${
-          focusReport.note ? `\n• Note: "${focusReport.note}"` : ''
-        }`
-      : '';
+            focusReport.note ? `\n• Note: "${focusReport.note}"` : ''
+          }`
+        : '';
 
-    const citationsBlock = activeCitations
-      .map((c) => `• ${c.code}: "${c.quote}"`)
-      .join('\n');
+      const citationsBlock = activeCitations
+        .map((c) => `• ${c.code}: "${c.quote}"`)
+        .join('\n');
 
-    const body = `Dear Councillors,
+      body = `Dear Councillors,
 
 ${introParagraph}
 
@@ -336,8 +364,9 @@ REQUESTED ACTION AT THE NEXT GREYSTONES MD MEETING:
 3. Transparent Reporting: Separately record and publish s.22 dog-fouling fines issued in Greystones Municipal District.
 
 Kind regards,
-${residentSignOff}
+${residentSignOff || 'A concerned Greystones resident'}
 (Anonymous Verification ID: ${submitterToken})`;
+    }
 
     const mailtoHref = `mailto:${toEmails.join(',')}?cc=${encodeURIComponent(
       ccEmails.join(',')
@@ -368,6 +397,7 @@ ${residentSignOff}
     activeCitations,
     residentSignOff,
     submitterToken,
+    includeLiveEvidenceStats,
   ]);
 
   const handleCopyFullEmail = async () => {
@@ -1432,6 +1462,17 @@ ${residentSignOff}
                     onChange={(e) => setResidentSignOff(e.target.value)}
                     className="w-full rounded-xl border border-line px-3 py-2 text-xs text-ink"
                   />
+                  {selectedTemplateId === 'practical_action' && (
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-muted hover:text-ink select-none pt-1">
+                      <input
+                        type="checkbox"
+                        checked={includeLiveEvidenceStats}
+                        onChange={(e) => setIncludeLiveEvidenceStats(e.target.checked)}
+                        className="rounded border-line text-primary focus:ring-primary h-3.5 w-3.5"
+                      />
+                      <span>Append live community map stats snapshot ({analysis.totalActiveReports} reports)</span>
+                    </label>
+                  )}
                 </div>
 
                 {/* Email Preview */}
