@@ -6,6 +6,7 @@ import {
   findNearestBins,
   generateAnonymousSubmitterToken,
   haversineDistanceMeters,
+  inferGreystonesLocation,
   isValidSubmitterToken,
   selectVerifiedCitations,
   SEVERITY_META,
@@ -191,6 +192,18 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
   it('safely gates organiser tools using isAdminSessionActive()', () => {
     assert.equal(typeof isAdminSessionActive(), 'boolean');
     assert.equal(isAdminSessionActive(), false);
+  });
+
+  it('infers location from device coordinates: snaps within Greystones and provides coordinate fallback outside Greystones', () => {
+    // Within Greystones South Beach
+    const local = inferGreystonesLocation(53.14431, -6.06047);
+    assert.equal(local.streetName, 'South Beach Promenade (near Lifeguard Hut)');
+    assert.equal(local.areaName, 'South Beach Prom');
+
+    // Outside Greystones (e.g. Dublin Spire >3000m away)
+    const outside = inferGreystonesLocation(53.3498, -6.2603);
+    assert.ok(outside.streetName.includes('Current Location (53.3498° N, 6.2603° W)'));
+    assert.equal(outside.areaName, 'Current Location');
   });
 });
 

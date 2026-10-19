@@ -13,6 +13,9 @@ interface GreystonesMapViewProps {
   draftCoords: { lat: number; lng: number };
   onMapClickDropPin: (lat: number, lng: number) => void;
   quickSeverity: SeverityType;
+  userLocation?: { lat: number; lng: number } | null;
+  isLocating?: boolean;
+  onRequestLocation?: () => void;
 }
 
 export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
@@ -25,6 +28,9 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
   draftCoords,
   onMapClickDropPin,
   quickSeverity,
+  userLocation,
+  isLocating = false,
+  onRequestLocation,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -46,8 +52,12 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
+    const initialCenter: [number, number] = userLocation
+      ? [userLocation.lat, userLocation.lng]
+      : [draftCoords.lat, draftCoords.lng];
+
     const map = L.map(mapContainerRef.current, {
-      center: [53.1445, -6.0615],
+      center: initialCenter,
       zoom: 16,
       zoomControl: false,
       attributionControl: true,
@@ -91,9 +101,34 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
   }, [basemapStyle]);
 
   useEffect(() => {
+    if (!mapInstanceRef.current || !userLocation) return;
+    mapInstanceRef.current.flyTo([userLocation.lat, userLocation.lng], 17, { duration: 0.65 });
+  }, [userLocation]);
+
+  useEffect(() => {
     const layerGroup = layerGroupRef.current;
     if (!layerGroup) return;
     layerGroup.clearLayers();
+
+    // 0. Render User Device Location Pulse Marker (if permission granted & location known)
+    if (userLocation) {
+      const userHtml = `
+        <div class="relative flex items-center justify-center pointer-events-none select-none">
+          <span class="absolute w-8 h-8 bg-blue-500/30 rounded-full animate-ping"></span>
+          <div class="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-md"></div>
+        </div>
+      `;
+      const userIcon = L.divIcon({
+        html: userHtml,
+        className: 'clean-gs-user-marker',
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+      });
+      L.marker([userLocation.lat, userLocation.lng], {
+        icon: userIcon,
+        zIndexOffset: 850,
+      }).addTo(layerGroup);
+    }
 
     // 1. Optional Background Bin Layer (hidden by default so map stays uncluttered, toggleable via drawer)
     if (showBinOverlay) {
@@ -215,6 +250,7 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
     selectedReport,
     draftCoords,
     quickSeverity,
+    userLocation,
   ]);
 
   const handleRecenterGreystones = () => {
@@ -231,8 +267,8 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
     <div className="relative w-full h-full flex-1 overflow-hidden bg-[#e4ece7]">
       <div ref={mapContainerRef} className="w-full h-full z-0" />
 
-      {/* Pre-Configured Zoomed-In Greystones Zones (Compact horizontal strip at top) */}
-      <div className="absolute top-2.5 left-2.5 right-14 z-20 flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 pointer-events-auto">
+      {/* Pre-Configured Zoomed-In Greystones Zones (Desktop only — hidden on mobile per user request) */}
+      <div className="hidden md:flex absolute top-2.5 left-2.5 right-14 z-20 items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 pointer-events-auto">
         <button
           type="button"
           onClick={() => handleFlyToHotspot(53.1442, -6.0604, 17)}
@@ -274,11 +310,15 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
       <div className="absolute right-2.5 top-2.5 flex flex-col gap-2 z-20 pointer-events-auto">
         <button
           type="button"
-          onClick={handleRecenterGreystones}
-          className="w-10 h-10 bg-white/95 text-ink rounded-xl shadow-sm border border-line flex items-center justify-center hover:bg-canvas active:scale-95 transition-transform"
-          title="Recenter on Greystones"
+          onClick={onRequestLocation ?? handleRecenterGreystones}
+          disabled={isLocating}
+          className="w-10 h-10 bg-white/95 text-ink rounded-xl shadow-sm border border-line flex items-center justify-center hover:bg-canvas active:scale-95 transition-transform disabled:opacity-75"
+          title="Use my current GPS location"
+          aria-label="Use my current GPS location"
         >
-          <span className="material-symbols-outlined text-[20px] text-primary">my_location</span>
+          <span className={`material-symbols-outlined text-[20px] text-primary ${isLocating ? 'animate-spin' : ''}`}>
+            {isLocating ? 'progress_activity' : 'my_location'}
+          </span>
         </button>
         <button
           type="button"
