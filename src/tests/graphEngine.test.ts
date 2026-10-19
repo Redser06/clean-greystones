@@ -19,6 +19,7 @@ import {
   HISTORICAL_ROADS_COHORT,
   isValidAnyCivicToken,
   verifyAdminPasscode,
+  isAdminSessionActive,
 } from '../utils/adminAnalytics';
 import {
   EMAIL_TEMPLATES,
@@ -185,6 +186,11 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
       assert.ok(!meta.label.includes('...'), 'Label must not contain ellipsis');
       assert.ok(!meta.shortLabel.includes('...'), 'Short label must not contain ellipsis');
     }
+  });
+
+  it('safely gates organiser tools using isAdminSessionActive()', () => {
+    assert.equal(typeof isAdminSessionActive(), 'boolean');
+    assert.equal(isAdminSessionActive(), false);
   });
 });
 

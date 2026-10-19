@@ -26,6 +26,7 @@ import {
 } from './utils/graphEngine';
 import { GreystonesMapView } from './components/GreystonesMapView';
 import { AdminBackendView } from './components/AdminBackendView';
+import { isAdminSessionActive } from './utils/adminAnalytics';
 import {
   subscribeToCrowdsourcedReports,
   syncReportToCloud,
@@ -75,11 +76,20 @@ export function App() {
       window.history.pushState({}, '', '/');
     }
     setIsAdminRoute(false);
+    setIsAdminAuthenticated(isAdminSessionActive());
   };
+
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => isAdminSessionActive());
 
   const [activeTab, setActiveTab] = useState<BottomNavTab>('map');
   const [hamburgerOpen, setHamburgerOpen] = useState<boolean>(false);
   const [hamburgerPage, setHamburgerPage] = useState<HamburgerPage>('none');
+
+  useEffect(() => {
+    if (hamburgerOpen || !isAdminRoute) {
+      setIsAdminAuthenticated(isAdminSessionActive());
+    }
+  }, [hamburgerOpen, isAdminRoute]);
 
   // Real-time Crowdsourced Reports from Communal Cloud Backend (with local storage cache)
   const [reports, setReports] = useState<FoulingReport[]>(() => {
@@ -163,6 +173,26 @@ export function App() {
     };
   }, []);
 
+  const [hasDismissedInstall, setHasDismissedInstall] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return sessionStorage.getItem('clean-greystones.dismissed-install') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const dismissInstallPrompt = () => {
+    setHasDismissedInstall(true);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('clean-greystones.dismissed-install', 'true');
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   const handlePromptInstall = async () => {
     if (deferredPrompt) {
       deferredPrompt.prompt();
@@ -170,9 +200,11 @@ export function App() {
         const choice = await deferredPrompt.userChoice;
         if (choice.outcome === 'accepted') {
           setIsStandalone(true);
+        } else {
+          dismissInstallPrompt();
         }
       } catch {
-        // dismissed
+        dismissInstallPrompt();
       }
       setDeferredPrompt(null);
     } else if (isIos) {
@@ -203,6 +235,19 @@ export function App() {
 
   // BUG-1 & BUG-3: Type Chooser Bottom Sheet & Live Banner Session State
   const [isTypeChooserOpen, setIsTypeChooserOpen] = useState<boolean>(false);
+  const [logState, setLogState] = useState<'idle' | 'logging' | 'completed' | 'failed'>('idle');
+
+  // FIX-1: Close Type Chooser sheet on Escape key
+  useEffect(() => {
+    if (!isTypeChooserOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsTypeChooserOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTypeChooserOpen]);
   const [liveBannerDismissed, setLiveBannerDismissed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -301,15 +346,32 @@ export function App() {
   // BUG-1: On map click or drag, record draft coords and open Type Chooser sheet
   const handleMapClickDropPin = (lat: number, lng: number) => {
     setDraftCoords({ lat, lng });
+    setLogState('idle');
     setIsTypeChooserOpen(true);
   };
 
-  // BUG-1: One type decision per log
+  // BUG-1: One type decision per log + Agent Hooks (P3)
   const handleSelectSeverityAndLog = (sev: SeverityType) => {
     setSelectedSeverity(sev);
     setIsTypeChooserOpen(false);
-    logReportImmediately(draftCoords.lat, draftCoords.lng, sev);
+    setLogState('logging');
+    try {
+      logReportImmediately(draftCoords.lat, draftCoords.lng, sev);
+      setLogState('completed');
+    } catch (err) {
+      console.error('Failed to log report:', err);
+      setLogState('failed');
+    }
   };
+
+  const agentMapState = useMemo(() => {
+    if (logState === 'logging') return 'logging';
+    if (logState === 'completed') return 'completed';
+    if (logState === 'failed') return 'failed_with_reason';
+    if (reports.length === 0) return 'empty';
+    if (mapFilter !== 'all') return 'filtering';
+    return 'live';
+  }, [logState, reports.length, mapFilter]);
 
   // BUG-5: Share Clean Greystones with neighbours / community
   const handleShareApp = async () => {
@@ -386,6 +448,7 @@ export function App() {
     setLastLoggedReport(null);
     setSelectedReport(null);
     setExpandOptionalReportModal(false);
+    setLogState('idle');
 
     deleteReportFromCloud(reportId).catch((err) => {
       console.warn('Could not undo report in cloud:', err);
@@ -655,7 +718,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-display text-base sm:text-lg font-bold text-ink tracking-tight">
+                  <span className="font-display text-base sm:text-lg font-bold text-ink tracking-tight whitespace-nowrap">
                     Clean Greystones
                   </span>
                   <span className="hidden sm:inline-block bg-canvas border border-line text-muted font-mono text-[10px] px-2 py-0.5 rounded-full font-semibold">
@@ -674,7 +737,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
                 setHamburgerPage('none');
                 setActiveTab('insights');
               }}
-              className="flex items-center gap-1.5 bg-canvas hover:bg-surface-container px-2.5 py-1.5 rounded-full border border-line text-xs font-semibold text-ink transition-colors"
+              className="flex items-center gap-1.5 bg-canvas hover:bg-surface-container px-2.5 py-1.5 rounded-full border border-line text-xs font-semibold text-ink transition-colors whitespace-nowrap shrink-0"
               title={isCloudSyncing ? 'Syncing with communal backend...' : 'Crowdsourced live data synced with communal cloud'}
             >
               <span className={`w-2 h-2 rounded-full ${isCloudSyncing ? 'bg-amber-500 animate-pulse' : 'bg-primary'}`} />
@@ -690,13 +753,13 @@ ${residentSignOff || 'A concerned Greystones resident'}
               )}
             </button>
 
-            {/* PWA Direct Install Header Button */}
-            {!isStandalone && (
+            {/* PWA Direct Install Header Button (Only rendered when prompt is active & available per FIX-4) */}
+            {!isStandalone && Boolean(deferredPrompt) && !hasDismissedInstall && (
               <button
                 type="button"
                 onClick={handlePromptInstall}
                 aria-label="Install Clean Greystones App"
-                className="flex items-center gap-1.5 bg-primary hover:bg-primary-container text-white px-2.5 py-1.5 rounded-full text-xs font-semibold shadow-xs transition-colors"
+                className="flex items-center gap-1.5 bg-primary hover:bg-primary-container text-white px-2.5 py-1.5 rounded-full text-xs font-semibold shadow-xs transition-colors whitespace-nowrap shrink-0"
               >
                 <span className="material-symbols-outlined text-[16px]">install_mobile</span>
                 <span>Install</span>
@@ -735,7 +798,8 @@ ${residentSignOff || 'A concerned Greystones resident'}
                 <button
                   type="button"
                   onClick={() => setHamburgerOpen(false)}
-                  className="w-8 h-8 rounded-lg hover:bg-canvas flex items-center justify-center text-muted"
+                  aria-label="Close menu"
+                  className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-lg hover:bg-canvas flex items-center justify-center text-muted transition-colors shrink-0"
                 >
                   ✕
                 </button>
@@ -848,46 +912,51 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   </div>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => openHamburgerDestination('data_admin')}
-                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-primary mt-0.5">
-                    database
-                  </span>
-                  <div>
-                    <p className="text-sm font-semibold text-ink">
-                      Demo Seed Data vs. Prod Clean Slate
-                    </p>
-                    <p className="text-xs text-muted">
-                      Clear pre-seeded demo pins for production or export GeoJSON/CSV
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={enterAdminPortal}
-                  className="w-full p-3 rounded-xl border border-line hover:border-primary bg-canvas hover:bg-white text-left flex items-start gap-3 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-ink mt-0.5">
-                    lock
-                  </span>
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-sm font-semibold text-ink">
-                        Common Civic Admin Backend
-                      </p>
-                      <span className="text-[10px] font-mono bg-ink text-white px-1.5 py-0.2 rounded">
-                        /admin
+                {/* FIX-3: Organiser Builder Tools (Gated behind organiser passcode) */}
+                {isAdminAuthenticated && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openHamburgerDestination('data_admin')}
+                      className="w-full p-3 rounded-xl border border-line hover:border-primary bg-white hover:bg-canvas text-left flex items-start gap-3 transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-primary mt-0.5">
+                        database
                       </span>
-                    </div>
-                    <p className="text-xs text-muted">
-                      Unified organiser portal filtered by app (Fouling, Roads, or All)
-                    </p>
-                  </div>
-                </button>
+                      <div>
+                        <p className="text-sm font-semibold text-ink">
+                          Demo Seed Data vs. Prod Clean Slate
+                        </p>
+                        <p className="text-xs text-muted">
+                          Clear pre-seeded demo pins for production or export GeoJSON/CSV
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={enterAdminPortal}
+                      className="w-full p-3 rounded-xl border border-line hover:border-primary bg-canvas hover:bg-white text-left flex items-start gap-3 transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-ink mt-0.5">
+                        lock
+                      </span>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-semibold text-ink">
+                            Common Civic Admin Backend
+                          </p>
+                          <span className="text-[10px] font-mono bg-ink text-white px-1.5 py-0.2 rounded">
+                            /admin
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted">
+                          Unified organiser portal filtered by app (Fouling, Roads, or All)
+                        </p>
+                      </div>
+                    </button>
+                  </>
+                )}
 
                 <a
                   href="https://greystones-roads.web.app"
@@ -1167,7 +1236,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
             <div
               className="flex-1 flex flex-col overflow-hidden relative"
               data-agent-surface="map"
-              data-agent-state={reports.length === 0 ? 'empty' : mapFilter !== 'all' ? 'filtering' : 'live'}
+              data-agent-state={agentMapState}
             >
               {/* Clean Slim Filter Bar (Only shown when live reports exist per BUG-2) */}
               {reports.length > 0 && (
@@ -1255,7 +1324,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
                         type="button"
                         onClick={dismissLiveBanner}
                         aria-label="Dismiss banner"
-                        className="p-1 rounded-full text-muted hover:text-ink hover:bg-canvas transition-colors shrink-0"
+                        className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full text-muted hover:text-ink hover:bg-canvas transition-colors shrink-0 flex items-center justify-center"
                       >
                         <span className="material-symbols-outlined text-base">close</span>
                       </button>
@@ -1387,35 +1456,42 @@ ${residentSignOff || 'A concerned Greystones resident'}
                 </div>
               </div>
 
-              {/* BUG-1: Type Chooser Bottom Sheet / Modal (One Type Decision per Log) */}
+              {/* BUG-1, FIX-1, FIX-2, FIX-5: Type Chooser Bottom Sheet / Modal (One Type Decision per Log) */}
               {isTypeChooserOpen && (
                 <div
                   role="dialog"
                   aria-modal="true"
                   aria-label="Choose fouling impact"
+                  data-agent-surface="type-sheet"
                   className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/40 backdrop-blur-xs p-0 sm:p-4"
                   onClick={(e) => {
                     if (e.target === e.currentTarget) setIsTypeChooserOpen(false);
                   }}
                 >
                   <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-2xl border border-line shadow-2xl p-5 space-y-4 animate-in slide-in-from-bottom duration-200">
-                    <div className="flex items-center justify-between">
-                      <div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
                         <span className="text-[11px] font-bold uppercase tracking-wider text-primary">
                           Log Observation
                         </span>
                         <h3 className="font-display text-base font-bold text-ink">
                           What did you spot?
                         </h3>
+                        {/* FIX-2: Explicit pin-relative position and distance to bin */}
                         <p className="text-xs text-muted truncate">
-                          {draftContext.streetName} · {draftContext.dBinAllM}m from {draftContext.nearestAll.code}
+                          At the pin · {draftContext.streetName} · {draftContext.dBinAllM}m from {draftContext.nearestAll.code}
+                        </p>
+                        {/* FIX-2: Hint for relocating pin */}
+                        <p className="text-[11px] text-muted mt-0.5 truncate">
+                          Wrong spot? Close this and tap the map to move the pin.
                         </p>
                       </div>
+                      {/* FIX-1 & FIX-5: 44px tap target, shrink-0, icon stays centered */}
                       <button
                         type="button"
                         onClick={() => setIsTypeChooserOpen(false)}
                         aria-label="Close type selection"
-                        className="w-8 h-8 rounded-lg hover:bg-canvas text-muted flex items-center justify-center transition-colors"
+                        className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-lg hover:bg-canvas text-muted flex items-center justify-center transition-colors shrink-0"
                       >
                         ✕
                       </button>
@@ -1428,6 +1504,8 @@ ${residentSignOff || 'A concerned Greystones resident'}
                           <button
                             key={sevKey}
                             type="button"
+                            data-agent-action="select-type"
+                            data-agent-value={sevKey}
                             onClick={() => handleSelectSeverityAndLog(sevKey)}
                             aria-label={`Log ${meta.label}: ${meta.subtext}`}
                             className="w-full p-3.5 rounded-2xl border border-line hover:border-primary bg-canvas hover:bg-white text-left flex items-start gap-3.5 transition-all active:scale-[0.99]"
