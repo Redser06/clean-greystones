@@ -1,6 +1,15 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.token.role == 'admin' ||
+        request.auth.token.email == 'admin@cleangreystones.ie' ||
+        exists(/databases/$(database)/documents/admin_roles/$(request.auth.uid))
+      );
+    }
+
     // Existing rules preserved: Forecasts - read-only for public, writes strictly authenticated
     match /forecasts/{forecastId} {
       allow read: if true;
@@ -47,13 +56,34 @@ service cloud.firestore {
     }
 
     // Clean Greystones: Crowdsourced Civic Dog Fouling Reports
+    // Public crowdsourced reports can be read, created, or updated (corroborations / soft-deletes).
+    // Hard deletions (such as administrative database wipes) are strictly restricted to administrators.
     match /clean_greystones_reports/{reportId} {
+      allow read, create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    // Clean Greystones: 24-hour Daily Summaries & Snapshots
+    match /clean_greystones_snapshots/{dateId} {
       allow read, write: if true;
+    }
+
+    // Clean Greystones: Civic Action & Analytics Events (Council emails, button clicks)
+    match /clean_greystones_events/{eventId} {
+      allow read, create: if true;
+      allow update, delete: if isAdmin();
     }
 
     // Fix Greystones Roads: Crowdsourced Sister App Hazard Reports
     match /greystones_roads_reports/{reportId} {
-      allow read, write: if true;
+      allow read, create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    // Civic Administrator Role Registry
+    match /admin_roles/{userId} {
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
     }
   }
 }

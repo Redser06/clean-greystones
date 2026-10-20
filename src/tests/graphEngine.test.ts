@@ -13,13 +13,11 @@ import {
 } from '../utils/graphEngine';
 import {
   computeTemporalAndSeasonalModel,
-  DEFAULT_ADMIN_PASSCODE,
   exportReportsToCsv,
   HISTORICAL_DOG_FOULING_COHORT,
   HISTORICAL_GREYSTONES_COHORT,
   HISTORICAL_ROADS_COHORT,
   isValidAnyCivicToken,
-  verifyAdminPasscode,
   isAdminSessionActive,
 } from '../utils/adminAnalytics';
 import {
@@ -137,11 +135,7 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     );
   });
 
-  it('verifies admin passcode and exports RFC-4180 CSV with app_stream and submitter_token columns', () => {
-    assert.equal(verifyAdminPasscode(DEFAULT_ADMIN_PASSCODE), true);
-    assert.equal(verifyAdminPasscode('GREYSTONES-ROADS-2026'), true);
-    assert.equal(verifyAdminPasscode('wrong-passcode'), false);
-
+  it('exports RFC-4180 CSV with app_stream and submitter_token columns', () => {
     const csv = exportReportsToCsv(INITIAL_REPORTS);
     const lines = csv.trim().split('\n');
     assert.equal(lines.length, INITIAL_REPORTS.length + 1);

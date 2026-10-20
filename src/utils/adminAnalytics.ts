@@ -2,11 +2,9 @@ import { CivicAppStream, FoulingReport, SeverityType } from '../types';
 
 const ADMIN_SESSION_STORAGE_KEY = 'greystones_civic_common_admin_session_v2';
 const ADMIN_LOCKOUT_STORAGE_KEY = 'greystones_civic_admin_lockout_v1';
-export const DEFAULT_ADMIN_PASSCODE = 'GREYSTONES-MD-2026'; // Maintained for backwards-compatible test assertions
-
-// Authorised SHA-256 hashes of administrator access keys (plaintext is never stored or compared)
+// Authorised SHA-256 hashes of administrator access keys (plaintext is never stored or compared in source code)
 export const AUTHORISED_ADMIN_HASHES = new Set<string>([
-  '10b727da6fbcbb47fc2de03a2e36b1a672d7e0b9470e30035912dd182828ba8e', // Primary organiser key
+  'c9c9550bffdfa4d68ceedc4492a2d92e5a499e2ccd938267d25d8941a2469f05', // Rotated primary organiser key
   '942aebd84a092024ea386b3e5d1f0f565e52c5bea9c6d5ffb1a80fc8ab2ee242', // Roads organiser key
 ]);
 
@@ -127,9 +125,7 @@ export async function verifyAdminPasscodeSecure(
 
   const isMatch =
     AUTHORISED_ADMIN_HASHES.has(hash) ||
-    (configuredHash && hash === configuredHash) ||
-    input.trim() === 'GREYSTONES-MD-2026' ||
-    input.trim() === 'GREYSTONES-ROADS-2026';
+    Boolean(configuredHash && hash === configuredHash);
 
   if (isMatch) {
     resetAdminLockout();
@@ -150,24 +146,6 @@ export async function verifyAdminPasscodeSecure(
     error: `Invalid organiser access key. ${failedInfo.remainingAttempts} attempt${failedInfo.remainingAttempts > 1 ? 's' : ''} remaining.`,
     remainingAttempts: failedInfo.remainingAttempts,
   };
-}
-
-/**
- * Synchronous verification for test suites and backward compatibility.
- */
-export function verifyAdminPasscode(input: string): boolean {
-  const trimmed = input.trim();
-  const configured =
-    (typeof import.meta !== 'undefined' &&
-      (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ADMIN_PASSCODE) ||
-    DEFAULT_ADMIN_PASSCODE;
-
-  // Check direct equality or known authorised values
-  return (
-    trimmed === configured ||
-    trimmed === 'GREYSTONES-MD-2026' ||
-    trimmed === 'GREYSTONES-ROADS-2026'
-  );
 }
 
 export function isAdminSessionActive(): boolean {

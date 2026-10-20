@@ -6,6 +6,7 @@ import {
   setDoc,
   deleteDoc,
   updateDoc,
+  getDoc,
   onSnapshot,
   query,
   orderBy,
@@ -13,15 +14,31 @@ import {
   getDocs,
   Unsubscribe,
 } from 'firebase/firestore';
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  User,
+  getIdTokenResult,
+} from 'firebase/auth';
 import { CivicActionEvent, DailyFoulingSnapshot, FoulingReport } from '../types';
 
+const env =
+  (typeof import.meta !== 'undefined'
+    ? (import.meta as unknown as { env?: Record<string, string> }).env
+    : undefined) ||
+  (typeof process !== 'undefined'
+    ? (process.env as Record<string, string>)
+    : undefined);
+
 const firebaseConfig = {
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'rapid-prototyping-4134c',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'rapid-prototyping-4134c.firebasestorage.app',
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'rapid-prototyping-4134c.firebaseapp.com',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '285060831800',
+  projectId: env?.VITE_FIREBASE_PROJECT_ID || 'rapid-prototyping-4134c',
+  appId: env?.VITE_FIREBASE_APP_ID || '',
+  storageBucket: env?.VITE_FIREBASE_STORAGE_BUCKET || 'rapid-prototyping-4134c.firebasestorage.app',
+  apiKey: env?.VITE_FIREBASE_API_KEY || '',
+  authDomain: env?.VITE_FIREBASE_AUTH_DOMAIN || 'rapid-prototyping-4134c.firebaseapp.com',
+  messagingSenderId: env?.VITE_FIREBASE_MESSAGING_SENDER_ID || '285060831800',
 };
 
 export const isFirebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
@@ -34,6 +51,108 @@ const app = isFirebaseConfigured
   : null;
 
 export const db = app ? getFirestore(app) : null;
+export const auth = app ? getAuth(app) : null;
+
+/**
+ * Verifies if a user possesses the administrator role.
+ * Evaluates custom JWT claims ('admin' / 'role === admin'), configured admin emails,
+ * and the Firestore admin_roles collection.
+ */
+export async function verifyUserAdminRole(user: User | null | undefined): Promise<boolean> {
+  if (!user) return false;
+  try {
+    // 1. Check custom claims in JWT
+    let claims: Record<string, unknown> | undefined;
+    if (typeof (user as any).getIdTokenResult === 'function') {
+      const tokenResult = await (user as any).getIdTokenResult();
+      claims = tokenResult?.claims;
+    } else {
+      const tokenResult = await getIdTokenResult(user);
+      claims = tokenResult?.claims;
+    }
+
+    if (claims?.admin === true || claims?.role === 'admin') {
+      return true;
+    }
+
+    // 2. Check user email against configured admin emails
+    const adminEmailsEnv =
+      (typeof import.meta !== 'undefined'
+        ? (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ADMIN_EMAILS
+        : undefined) ||
+      (typeof process !== 'undefined' ? process.env?.VITE_ADMIN_EMAILS : undefined) ||
+      'admin@cleangreystones.ie';
+
+    const allowedEmails = adminEmailsEnv
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (user.email && allowedEmails.includes(user.email.toLowerCase())) {
+      return true;
+    }
+
+    // 3. Fallback check: admin_roles collection document in Firestore
+    if (db) {
+      const adminDoc = await getDoc(doc(db, 'admin_roles', user.uid));
+      if (adminDoc.exists() && adminDoc.data()?.role === 'admin') {
+        return true;
+      }
+    }
+
+    return false;
+  } catch (err) {
+    console.warn('Error verifying admin role:', err);
+    return false;
+  }
+}
+
+/**
+ * Signs in an administrator using Firebase Authentication with Email & Password.
+ */
+export async function signInAdminWithFirebase(
+  email: string,
+  passcode: string
+): Promise<User> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is not configured');
+  }
+  const cred = await signInWithEmailAndPassword(auth, email.trim(), passcode);
+  const isAdmin = await verifyUserAdminRole(cred.user);
+  if (!isAdmin) {
+    await signOut(auth);
+    throw new Error('Access denied: Account does not possess an active administrator role');
+  }
+  return cred.user;
+}
+
+/**
+ * Signs out the currently authenticated Firebase user.
+ */
+export async function signOutAdminFromFirebase(): Promise<void> {
+  if (!auth) return;
+  await signOut(auth);
+}
+
+/**
+ * Listens for Firebase Auth state changes and verifies whether the current user has the admin role.
+ */
+export function subscribeToAdminAuth(
+  callback: (user: User | null, isAdmin: boolean) => void
+): () => void {
+  if (!auth) {
+    callback(null, false);
+    return () => {};
+  }
+  return onAuthStateChanged(auth, async (user) => {
+    if (!user) {
+      callback(null, false);
+      return;
+    }
+    const isAdmin = await verifyUserAdminRole(user);
+    callback(user, isAdmin);
+  });
+}
 
 const REPORTS_COLLECTION = 'clean_greystones_reports';
 
@@ -59,10 +178,12 @@ export function subscribeToCrowdsourcedReports(
       const live: FoulingReport[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as FoulingReport;
-        live.push({
-          ...data,
-          id: docSnap.id,
-        });
+        if (data.status !== 'deleted') {
+          live.push({
+            ...data,
+            id: docSnap.id,
+          });
+        }
       });
       onUpdate(live);
     },
@@ -88,13 +209,24 @@ export async function syncReportToCloud(report: FoulingReport): Promise<void> {
 }
 
 /**
- * Deletes a fouling report from the communal cloud backend (accidental drop or moderation).
+ * Deletes a fouling report from the communal cloud backend.
+ * If signed in as an administrator, performs a hard delete in Firestore.
+ * If unauthenticated or a resident removing an accidental submission, applies a soft-delete status.
  */
 export async function deleteReportFromCloud(reportId: string): Promise<void> {
   if (!db) return;
   try {
     const docRef = doc(db, REPORTS_COLLECTION, reportId);
-    await deleteDoc(docRef);
+    const currentUser = auth?.currentUser;
+    const isAdmin = await verifyUserAdminRole(currentUser);
+    if (isAdmin) {
+      await deleteDoc(docRef);
+    } else {
+      await updateDoc(docRef, {
+        status: 'deleted',
+        deletedAt: new Date().toISOString(),
+      });
+    }
   } catch (err) {
     console.error('Failed to delete report from communal cloud:', err);
     throw err;
@@ -201,7 +333,10 @@ export async function fetchLiveReportsFromCloud(): Promise<FoulingReport[]> {
     const snap = await getDocs(q);
     const live: FoulingReport[] = [];
     snap.forEach((d) => {
-      live.push({ ...(d.data() as FoulingReport), id: d.id });
+      const data = d.data() as FoulingReport;
+      if (data.status !== 'deleted') {
+        live.push({ ...data, id: d.id });
+      }
     });
     return live;
   } catch (err) {
@@ -303,8 +438,16 @@ export async function fetchCivicEventsFromCloud(): Promise<CivicActionEvent[]> {
 
 /**
  * Completely clears all live reports from Cloud Firestore (admin backend data wipe).
+ * Requires verified Firebase administrator authentication.
  */
 export async function clearAllLiveReportsFromCloud(): Promise<number> {
+  const currentUser = auth?.currentUser;
+  const isAdmin = await verifyUserAdminRole(currentUser);
+  if (!isAdmin) {
+    throw new Error(
+      'Unauthorized: An authenticated administrator with an admin role is required to clear cloud data.'
+    );
+  }
   if (!db) return 0;
   try {
     const colRef = collection(db, REPORTS_COLLECTION);
@@ -327,8 +470,16 @@ export async function clearAllLiveReportsFromCloud(): Promise<number> {
 
 /**
  * Completely clears all civic analytics events from Cloud Firestore.
+ * Requires verified Firebase administrator authentication.
  */
 export async function clearAllCivicEventsFromCloud(): Promise<number> {
+  const currentUser = auth?.currentUser;
+  const isAdmin = await verifyUserAdminRole(currentUser);
+  if (!isAdmin) {
+    throw new Error(
+      'Unauthorized: An authenticated administrator with an admin role is required to clear cloud data.'
+    );
+  }
   if (!db) return 0;
   try {
     const colRef = collection(db, EVENTS_COLLECTION);
