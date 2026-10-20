@@ -11,9 +11,9 @@ If you've ever pushed a buggy down Church Road, navigated a scooter through Burn
 
 Cleaning dog muck out of pram treads or kid's school shoes at 8:45 AM isn't just frustrating — it's a public health hazard that happens week in, week out. When residents raise it, the usual response is vague promises or claims that *"we have plenty of bins"* and *"there's no evidence"*.
 
-**Clean Greystones** was built to change that. Started as a tool shared across local parent groups (including the Greystones **"Mother Knows Best"** WhatsApp community), it gives residents a 5-second way to log fouling spots right from their phone.
+**Clean Greystones** was built to change that. The app was literally vibe-coded late into the night by a local Greystones dad ([Conor Redmond](https://github.com/Redser06)) out of pure love for his wife and kids — after one too many morning school-run emergencies picking dog muck out of pram treads and school shoes with a twig. What started as loving, late-night AI vibe-coding to solve a household headache has turned into a full-scale civic evidence platform shared across local parent groups (including the Greystones **"Mother Knows Best"** WhatsApp community).
 
-Instead of venting into the void, every tap builds an undeniable, geotagged evidence dossier that connects directly to our 6 Greystones Municipal District councillors.
+Instead of venting into the void, every tap gives residents a 5-second way to log fouling spots right from their phone and builds an undeniable, geotagged evidence dossier that connects directly to our 6 Greystones Municipal District councillors.
 
 ---
 
@@ -21,9 +21,11 @@ Instead of venting into the void, every tap builds an undeniable, geotagged evid
 
 *(Shared with local communities, school gates, and parent groups like "Mother Knows Best")*
 
-> *"Ladies (and fellow buggy slalom champions 🏆)!*
+> *"Ladies (and fellow buggy slalom champions 🏆👶)!*
 >
-> *If anyone else is sick of treating a casual walk down Church Road or the South Beach prom like an Olympic minefield for pram wheels, scooters, and school shoes… we made something for us! 💩🙈*
+> *If anyone else is sick of treating a casual walk down Church Road or the South Beach prom like an Olympic minefield for pram wheels, scooters, and school shoes…*
+>
+> *My husband Conor has literally spent his evenings vibe-coding an entire web app for us out of pure love (and because he was determined that neither of us ever has to scrub dog poo out of pram treads with an old toothbrush at 8:45 AM ever again 😂💻❤️).*
 >
 > *👉 **https://cleangreystones.ie***
 >
