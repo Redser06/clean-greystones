@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import type { User } from 'firebase/auth';
 import { CivicActionEvent, CivicAppStream, FoulingReport } from '../types';
 import { computeBinsVsFoulingAnalysis } from '../utils/graphEngine';
 import { computeProductMetrics } from '../utils/productMetrics';
@@ -16,6 +17,11 @@ import {
   setAdminSessionActive,
   verifyAdminPasscodeSecure,
 } from '../utils/adminAnalytics';
+import {
+  signInAdminWithFirebase,
+  signOutAdminFromFirebase,
+  subscribeToAdminAuth,
+} from '../utils/firebaseSync';
 
 interface AdminBackendViewProps {
   liveReports: FoulingReport[];
@@ -74,9 +80,31 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() =>
     isAdminSessionActive()
   );
+  const [loginMode, setLoginMode] = useState<'firebase' | 'passcode'>('firebase');
+  const [adminEmail, setAdminEmail] = useState<string>('admin@cleangreystones.ie');
+  const [adminPassword, setAdminPassword] = useState<string>('');
   const [passcodeInput, setPasscodeInput] = useState<string>('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
+
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [isFirebaseAdmin, setIsFirebaseAdmin] = useState<boolean>(false);
+
+  const [clearAuthEmail, setClearAuthEmail] = useState<string>('admin@cleangreystones.ie');
+  const [clearAuthPassword, setClearAuthPassword] = useState<string>('');
+  const [clearAuthError, setClearAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeToAdminAuth((user, isAdmin) => {
+      setFirebaseUser(user);
+      setIsFirebaseAdmin(isAdmin);
+      if (isAdmin) {
+        setIsAuthenticated(true);
+        setAdminSessionActive(true);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   const [datasetScope, setDatasetScope] = useState<'full_12m' | 'live_only'>('full_12m');
   const [activeTab, setActiveTab] = useState<AdminTab>('metrics');
@@ -92,47 +120,90 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passcodeInput.trim()) return;
     setIsLoggingIn(true);
     setLoginError(null);
     try {
-      const res = await verifyAdminPasscodeSecure(passcodeInput);
-      if (res.ok) {
+      if (loginMode === 'firebase') {
+        if (!adminEmail.trim() || !adminPassword.trim()) {
+          setLoginError('Please enter both administrator email and password.');
+          setIsLoggingIn(false);
+          return;
+        }
+        const user = await signInAdminWithFirebase(adminEmail, adminPassword);
+        setFirebaseUser(user);
+        setIsFirebaseAdmin(true);
         setAdminSessionActive(true);
         setIsAuthenticated(true);
         setLoginError(null);
-        setPasscodeInput('');
+        setAdminPassword('');
       } else {
-        setLoginError(res.error || 'Invalid administrator credentials.');
+        if (!passcodeInput.trim()) {
+          setLoginError('Please enter an organiser access key.');
+          setIsLoggingIn(false);
+          return;
+        }
+        const res = await verifyAdminPasscodeSecure(passcodeInput);
+        if (res.ok) {
+          setAdminSessionActive(true);
+          setIsAuthenticated(true);
+          setLoginError(null);
+          setPasscodeInput('');
+        } else {
+          setLoginError(res.error || 'Invalid administrator credentials.');
+        }
       }
-    } catch {
-      setLoginError('Authentication verification error. Please try again.');
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Authentication verification error. Please check credentials and try again.';
+      setLoginError(msg);
     } finally {
       setIsLoggingIn(false);
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setAdminSessionActive(false);
     setIsAuthenticated(false);
     setPasscodeInput('');
+    setAdminPassword('');
+    try {
+      await signOutAdminFromFirebase();
+    } catch {
+      // ignore
+    }
   };
 
   const handleConfirmClearBackend = async () => {
     if (!onClearAllBackendData) return;
     setIsClearingBackend(true);
+    setClearAuthError(null);
     try {
+      // If not already authenticated in Firebase Auth with admin role, authenticate first
+      if (!isFirebaseAdmin) {
+        if (!clearAuthEmail.trim() || !clearAuthPassword.trim()) {
+          setClearAuthError('Administrator credentials required to authorize cloud wipe.');
+          setIsClearingBackend(false);
+          return;
+        }
+        await signInAdminWithFirebase(clearAuthEmail, clearAuthPassword);
+      }
+
       await onClearAllBackendData({
         clearReports: true,
         clearEvents: clearEventsFlag,
       });
       setShowClearModal(false);
+      setClearAuthPassword('');
       setExportToast('Live backend data cleared from Cloud Firestore.');
       setTimeout(() => setExportToast(null), 4000);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to clear backend data:', err);
-      setExportToast('Could not clear backend data. Check network connection.');
-      setTimeout(() => setExportToast(null), 4000);
+      const msg = err instanceof Error ? err.message : 'Could not clear backend data.';
+      setClearAuthError(msg);
+      setExportToast(`Error: ${msg}`);
+      setTimeout(() => setExportToast(null), 5000);
     } finally {
       setIsClearingBackend(false);
     }
@@ -328,47 +399,140 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleLoginSubmit} className="mt-6 space-y-4">
-              <div>
-                <label
-                  htmlFor="admin-passcode"
-                  className="block text-xs font-semibold text-ink mb-1.5"
-                >
-                  Organiser Access Key
-                </label>
-                <input
-                  id="admin-passcode"
-                  type="password"
-                  disabled={lockoutState.isLocked || isLoggingIn}
-                  value={passcodeInput}
-                  onChange={(e) => {
-                    setPasscodeInput(e.target.value);
-                    if (loginError) setLoginError(null);
-                  }}
-                  placeholder={lockoutState.isLocked ? 'Access temporarily locked…' : 'Enter organiser access key…'}
-                  className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                  autoFocus={!lockoutState.isLocked}
-                />
-                {loginError && (
-                  <p className="text-xs text-error font-medium mt-1.5">{loginError}</p>
-                )}
-              </div>
+            <div className="flex rounded-xl bg-canvas p-1 border border-line mt-6 mb-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginMode('firebase');
+                  setLoginError(null);
+                }}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                  loginMode === 'firebase'
+                    ? 'bg-white shadow-xs text-ink'
+                    : 'text-muted hover:text-ink'
+                }`}
+              >
+                Firebase Admin Auth
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginMode('passcode');
+                  setLoginError(null);
+                }}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                  loginMode === 'passcode'
+                    ? 'bg-white shadow-xs text-ink'
+                    : 'text-muted hover:text-ink'
+                }`}
+              >
+                Organiser Access Key
+              </button>
+            </div>
+
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
+              {loginMode === 'firebase' ? (
+                <>
+                  <div>
+                    <label
+                      htmlFor="admin-email"
+                      className="block text-xs font-semibold text-ink mb-1.5"
+                    >
+                      Administrator Email
+                    </label>
+                    <input
+                      id="admin-email"
+                      type="email"
+                      disabled={isLoggingIn}
+                      value={adminEmail}
+                      onChange={(e) => {
+                        setAdminEmail(e.target.value);
+                        if (loginError) setLoginError(null);
+                      }}
+                      placeholder="admin@cleangreystones.ie"
+                      className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="admin-password"
+                      className="block text-xs font-semibold text-ink mb-1.5"
+                    >
+                      Administrator Password
+                    </label>
+                    <input
+                      id="admin-password"
+                      type="password"
+                      disabled={isLoggingIn}
+                      value={adminPassword}
+                      onChange={(e) => {
+                        setAdminPassword(e.target.value);
+                        if (loginError) setLoginError(null);
+                      }}
+                      placeholder="Enter administrator password…"
+                      className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label
+                    htmlFor="admin-passcode"
+                    className="block text-xs font-semibold text-ink mb-1.5"
+                  >
+                    Organiser Access Key
+                  </label>
+                  <input
+                    id="admin-passcode"
+                    type="password"
+                    disabled={lockoutState.isLocked || isLoggingIn}
+                    value={passcodeInput}
+                    onChange={(e) => {
+                      setPasscodeInput(e.target.value);
+                      if (loginError) setLoginError(null);
+                    }}
+                    placeholder={
+                      lockoutState.isLocked
+                        ? 'Access temporarily locked…'
+                        : 'Enter organiser access key…'
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                    autoFocus={!lockoutState.isLocked}
+                  />
+                </div>
+              )}
+
+              {loginError && (
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-error font-medium">
+                  {loginError}
+                </div>
+              )}
 
               <button
                 type="submit"
-                disabled={lockoutState.isLocked || isLoggingIn || !passcodeInput.trim()}
+                disabled={
+                  isLoggingIn ||
+                  (loginMode === 'passcode' &&
+                    (lockoutState.isLocked || !passcodeInput.trim())) ||
+                  (loginMode === 'firebase' && (!adminEmail.trim() || !adminPassword.trim()))
+                }
                 className="w-full py-2.5 px-4 rounded-xl bg-primary hover:bg-primary-container text-white font-semibold text-sm transition shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {isLoggingIn ? (
                   <span>Verifying Credentials…</span>
+                ) : loginMode === 'firebase' ? (
+                  <span>Sign In with Firebase Admin Role</span>
                 ) : (
-                  <span>Sign In to Common Civic Backend</span>
+                  <span>Sign In with Organiser Key</span>
                 )}
               </button>
 
               <div className="pt-3 border-t border-line text-center">
                 <p className="text-[11px] text-muted leading-relaxed">
-                  🔒 Protected with SHA-256 cryptographic hashing, brute-force rate-limiting, and expiring 2-hour sessions.
+                  {loginMode === 'firebase'
+                    ? '🔒 Authenticated with Firebase Identity Platform and custom admin claims.'
+                    : '🔒 Protected with SHA-256 cryptographic hashing and brute-force rate-limiting.'}
                 </p>
               </div>
             </form>
@@ -425,6 +589,15 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 >
                   Common Portal
                 </span>
+                {firebaseUser ? (
+                  <span className="hidden md:inline-flex items-center gap-1 text-[10px] bg-green-50 text-primary border border-green-200 px-1.5 py-0.5 rounded font-mono font-medium">
+                    ✓ {firebaseUser.email} (Role: Admin)
+                  </span>
+                ) : (
+                  <span className="hidden md:inline-flex items-center gap-1 text-[10px] bg-canvas text-muted border border-line px-1.5 py-0.5 rounded font-mono">
+                    🔑 Organiser Key
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -1840,6 +2013,50 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                 </span>
               </label>
             </div>
+
+            {isFirebaseAdmin ? (
+              <div className="p-2.5 rounded-xl bg-green-50 border border-green-200 text-primary text-xs flex items-center gap-2">
+                <span>✓</span>
+                <span className="font-medium truncate">
+                  Authenticated as <strong>{firebaseUser?.email || 'admin@cleangreystones.ie'}</strong> (Admin Role)
+                </span>
+              </div>
+            ) : (
+              <div className="space-y-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 text-xs">
+                <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                  <span>🔒</span>
+                  <span>Firebase Administrator Sign-In Required</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-amber-800">
+                  Firestore security rules strictly require an active Firebase user with the <code>admin</code> role to authorize data wipes.
+                </p>
+                <div className="space-y-2 pt-1">
+                  <input
+                    type="email"
+                    value={clearAuthEmail}
+                    onChange={(e) => {
+                      setClearAuthEmail(e.target.value);
+                      if (clearAuthError) setClearAuthError(null);
+                    }}
+                    placeholder="admin@cleangreystones.ie"
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-line bg-white text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <input
+                    type="password"
+                    value={clearAuthPassword}
+                    onChange={(e) => {
+                      setClearAuthPassword(e.target.value);
+                      if (clearAuthError) setClearAuthError(null);
+                    }}
+                    placeholder="Enter administrator password…"
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-line bg-white text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  {clearAuthError && (
+                    <p className="text-[11px] text-error font-semibold">{clearAuthError}</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button

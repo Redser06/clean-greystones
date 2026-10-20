@@ -1,6 +1,6 @@
 export type SeverityType = 'just_poop' | 'stepped_in' | 'buggy_wheels' | 'wheelchair_wheels';
 
-export type ReportStatus = 'spotted' | 'stale' | 'pending' | 'merged';
+export type ReportStatus = 'spotted' | 'stale' | 'pending' | 'merged' | 'deleted';
 
 export type CivicAppStream = 'clean_greystones' | 'greystones_roads';
 

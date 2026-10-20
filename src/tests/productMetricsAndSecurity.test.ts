@@ -35,7 +35,14 @@ import {
   getAdminLockoutState,
   recordFailedAdminLogin,
   resetAdminLockout,
+  computeSha256Hex,
+  AUTHORISED_ADMIN_HASHES,
 } from '../utils/adminAnalytics';
+import {
+  verifyUserAdminRole,
+  clearAllLiveReportsFromCloud,
+} from '../utils/firebaseSync';
+import type { User } from 'firebase/auth';
 import { CivicActionEvent, FoulingReport } from '../types';
 
 describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
@@ -181,15 +188,18 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
   });
 
   it('verifies authorised admin passcodes securely via SHA-256 hashes', async () => {
-    // Valid passcodes
-    const res1 = await verifyAdminPasscodeSecure('GREYSTONES-MD-2026');
-    assert.equal(res1.ok, true);
+    // Dynamic test key registered by hash only (no plaintext keys in source code)
+    const testSecret = 'TEST-EPHEMERAL-KEY-99482';
+    const testHash = await computeSha256Hex(testSecret);
+    AUTHORISED_ADMIN_HASHES.add(testHash);
 
-    const res2 = await verifyAdminPasscodeSecure('GREYSTONES-ROADS-2026');
-    assert.equal(res2.ok, true);
+    const validRes = await verifyAdminPasscodeSecure(testSecret);
+    assert.equal(validRes.ok, true);
+
+    AUTHORISED_ADMIN_HASHES.delete(testHash);
 
     // Invalid passcode
-    const badRes = await verifyAdminPasscodeSecure('wrong-passcode');
+    const badRes = await verifyAdminPasscodeSecure('wrong-passcode-invalid');
     assert.equal(badRes.ok, false);
   });
 
@@ -210,11 +220,92 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
     assert.ok(lockedState.remainingMs > 0);
 
     // Attempting login while locked immediately fails
-    const failWhileLocked = await verifyAdminPasscodeSecure('GREYSTONES-MD-2026');
+    const failWhileLocked = await verifyAdminPasscodeSecure('any-attempted-key');
     assert.equal(failWhileLocked.ok, false);
     assert.ok(failWhileLocked.error?.includes('lockout active'));
 
     resetAdminLockout();
+  });
+
+  it('verifies administrator roles via custom claims and administrator email allowlists', async () => {
+    // 1. User with admin custom claim
+    const adminClaimUser = {
+      uid: 'user-admin-1',
+      email: 'organizer@cleangreystones.ie',
+      getIdTokenResult: async () => ({
+        claims: { admin: true },
+        authTime: 'now',
+        issuedAtTime: 'now',
+        expirationTime: 'later',
+        signInProvider: 'password',
+        signInSecondFactor: null,
+        token: 'mock-jwt-token',
+      }),
+    } as unknown as User;
+    assert.equal(await verifyUserAdminRole(adminClaimUser), true);
+
+    // 2. User with role === 'admin' claim
+    const roleClaimUser = {
+      uid: 'user-admin-2',
+      email: 'staff@wicklow.ie',
+      getIdTokenResult: async () => ({
+        claims: { role: 'admin' },
+        authTime: 'now',
+        issuedAtTime: 'now',
+        expirationTime: 'later',
+        signInProvider: 'password',
+        signInSecondFactor: null,
+        token: 'mock-jwt-token',
+      }),
+    } as unknown as User;
+    assert.equal(await verifyUserAdminRole(roleClaimUser), true);
+
+    // 3. User with matching default admin email
+    const emailAdminUser = {
+      uid: 'user-admin-3',
+      email: 'admin@cleangreystones.ie',
+      getIdTokenResult: async () => ({
+        claims: {},
+        authTime: 'now',
+        issuedAtTime: 'now',
+        expirationTime: 'later',
+        signInProvider: 'password',
+        signInSecondFactor: null,
+        token: 'mock-jwt-token',
+      }),
+    } as unknown as User;
+    assert.equal(await verifyUserAdminRole(emailAdminUser), true);
+
+    // 4. Regular citizen / resident without admin claims
+    const residentUser = {
+      uid: 'user-resident-1',
+      email: 'resident@gmail.com',
+      getIdTokenResult: async () => ({
+        claims: {},
+        authTime: 'now',
+        issuedAtTime: 'now',
+        expirationTime: 'later',
+        signInProvider: 'password',
+        signInSecondFactor: null,
+        token: 'mock-jwt-token',
+      }),
+    } as unknown as User;
+    assert.equal(await verifyUserAdminRole(residentUser), false);
+
+    // 5. Unauthenticated visitor (null user)
+    assert.equal(await verifyUserAdminRole(null), false);
+  });
+
+  it('protects destructive cloud backend wipe operations against unauthenticated access', async () => {
+    // Calling clearAllLiveReportsFromCloud without active Firebase admin session must throw
+    await assert.rejects(
+      async () => {
+        await clearAllLiveReportsFromCloud();
+      },
+      {
+        message: /Unauthorized: An authenticated administrator with an admin role is required to clear cloud data\./,
+      }
+    );
   });
 
   it('manages expiring 2-hour admin sessions safely without keeping plaintext secrets', () => {
