@@ -1745,9 +1745,9 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                 </div>
               )}
 
-              {/* Clean Slim Filter Bar (Only shown when live reports exist per BUG-2) */}
+              {/* Clean Slim Filter Bar (Only shown on desktop when live reports exist; removed on mobile per user request) */}
               {reports.length > 0 && (
-                <section className="bg-white/95 backdrop-blur-sm px-3 py-1.5 z-20 border-b border-line flex items-center justify-between gap-2">
+                <section className="hidden md:flex bg-white/95 backdrop-blur-sm px-3 py-1.5 z-20 border-b border-line items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
                     <button
                       type="button"
