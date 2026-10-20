@@ -45,6 +45,9 @@ import {
   subscribeToCivicEvents,
   clearAllLiveReportsFromCloud,
   clearAllCivicEventsFromCloud,
+  subscribeToCrowdsourcedBins,
+  syncBinToCloud,
+  deleteBinFromCloud,
 } from './utils/firebaseSync';
 import {
   reconcileReportLog,
@@ -233,7 +236,96 @@ export function App() {
       );
     }
   };
-  const [bins] = useState<PublicBin[]>(INITIAL_PUBLIC_BINS);
+  const [bins, setBins] = useState<PublicBin[]>(() => {
+    if (typeof window === 'undefined') return INITIAL_PUBLIC_BINS;
+    try {
+      const stored = localStorage.getItem('clean-greystones.bins.v1');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (err) {
+      console.warn('Failed to load local bins:', err);
+    }
+    return INITIAL_PUBLIC_BINS;
+  });
+
+  useEffect(() => {
+    const unsubscribe = subscribeToCrowdsourcedBins(
+      (cloudBins) => {
+        if (cloudBins && cloudBins.length > 0) {
+          setBins((prev) => {
+            const map = new Map<string, PublicBin>();
+            prev.forEach((b) => map.set(b.id, b));
+            cloudBins.forEach((b) => map.set(b.id, b));
+            const merged = Array.from(map.values());
+            if (typeof window !== 'undefined') {
+              try {
+                localStorage.setItem('clean-greystones.bins.v1', JSON.stringify(merged));
+              } catch {
+                // ignore
+              }
+            }
+            return merged;
+          });
+        }
+      },
+      (err) => {
+        console.warn('Bins subscription warning:', err);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const handleSaveBin = async (bin: PublicBin) => {
+    setBins((prev) => {
+      const idx = prev.findIndex((b) => b.id === bin.id);
+      const next = idx >= 0 ? prev.map((b) => (b.id === bin.id ? bin : b)) : [...prev, bin];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('clean-greystones.bins.v1', JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+      return next;
+    });
+    try {
+      await syncBinToCloud(bin);
+    } catch (err) {
+      console.warn('Could not sync bin to cloud:', err);
+    }
+  };
+
+  const handleDeleteBin = async (binId: string) => {
+    setBins((prev) => {
+      const next = prev.filter((b) => b.id !== binId);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('clean-greystones.bins.v1', JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+      return next;
+    });
+    try {
+      await deleteBinFromCloud(binId);
+    } catch (err) {
+      console.warn('Could not delete bin from cloud:', err);
+    }
+  };
+
+  const handleResetBins = async () => {
+    setBins(INITIAL_PUBLIC_BINS);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('clean-greystones.bins.v1', JSON.stringify(INITIAL_PUBLIC_BINS));
+      } catch {
+        // ignore
+      }
+    }
+  };
 
   // Unique provable anonymous device token (no logins, no PII)
   const [submitterToken] = useState<string>(() => getOrCreateSubmitterToken());
@@ -410,6 +502,7 @@ export function App() {
     COUNCIL_CC_CONTACTS.filter((c) => c.defaultChecked).map((c) => c.id)
   );
   const [selectedTemplateId, setSelectedTemplateId] = useState<EmailTemplateId>('practical_action');
+  const [customEmailBody, setCustomEmailBody] = useState<string>('');
   const [residentSignOff, setResidentSignOff] = useState<string>('A concerned Greystones resident');
   const [includeLiveEvidenceStats, setIncludeLiveEvidenceStats] = useState<boolean>(false);
   const [emailCopiedToast, setEmailCopiedToast] = useState<string>('');
@@ -763,12 +856,25 @@ export function App() {
     ).map((c) => c.email);
 
     const topHotspot = analysis.nearBinHotspots[0]?.areaName ?? 'South Beach Promenade';
-    const focusReport = selectedReport ?? lastLoggedReport ?? reports[0];
 
     let subject = 'Dog Fouling in Greystones — Need for Practical Solutions and Resources';
     let body = '';
 
-    if (selectedTemplateId === 'practical_action') {
+    if (selectedTemplateId === 'write_your_own') {
+      subject = 'Dog Fouling in Greystones Municipal District';
+      const greeting = 'Dear Councillors,\n\n';
+      const sign = residentSignOff
+        ? `\n\nKind regards,\n${residentSignOff}`
+        : '\n\nKind regards,\nA concerned Greystones resident';
+      body = customEmailBody.trim()
+        ? `${customEmailBody.trim()}${sign}`
+        : `${greeting}\n\n${sign}`;
+
+      if (includeLiveEvidenceStats) {
+        body += `\n\n---\nVerified Communal Greystones Evidence (cleangreystones.ie):\n• Past 24 Hours (Active Window): ${weeklyEvidence.todayCount} verified drops\n• 7-Day Cumulative Record: ${weeklyEvidence.totalReports} reports across ${weeklyEvidence.distinctSubmitters} distinct resident devices\n• Direct Wheelchair/Buggy/Footwear Contaminations: ${weeklyEvidence.highImpactCount}\n• Proximity to Public Bins: ${weeklyEvidence.nearBin50mPct}% occurred within 50m of a litter bin\n• Primary Hotspot: ${weeklyEvidence.topHotspots[0]?.streetName || topHotspot}`;
+      }
+    } else {
+      // Template 1: practical_action (Prefilled Letter)
       subject = 'Dog Fouling in Greystones — Need for Practical Solutions and Resources';
       body = `Dear Councillor,
 
@@ -791,59 +897,6 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
       if (includeLiveEvidenceStats) {
         body += `\n\n---\nVerified Communal Greystones Evidence (cleangreystones.ie):\n• Past 24 Hours (Active Window): ${weeklyEvidence.todayCount} verified drops\n• 7-Day Cumulative Record: ${weeklyEvidence.totalReports} reports across ${weeklyEvidence.distinctSubmitters} distinct resident devices\n• Direct Wheelchair/Buggy/Footwear Contaminations: ${weeklyEvidence.highImpactCount}\n• Proximity to Public Bins: ${weeklyEvidence.nearBin50mPct}% occurred within 50m of a litter bin\n• Primary Hotspot: ${weeklyEvidence.topHotspots[0]?.streetName || topHotspot}`;
       }
-    } else {
-      let introParagraph = `I am writing as a resident of Greystones, Co. Wicklow to raise urgent frustration over the volume and frequency of dog fouling across our footpaths, seafront promenade, and public spaces.`;
-      subject = `Dog Fouling in Greystones — ${weeklyEvidence.totalReports} Reports (${weeklyEvidence.nearBin50mPct}% Within 50m of a Bin)`;
-
-      if (selectedTemplateId === 'bin_mythbuster') {
-        subject = `Greystones Dog Fouling Evidence: ${weeklyEvidence.nearBin50mPct}% of Mapped Fouling Occurs Within 50m of a Public Bin`;
-        introParagraph = `I am sharing community evidence from the Clean Greystones Dog Fouling Map. Background proximity checks against Greystones public litter bins show that ${analysis.nearBin15mCount} of ${analysis.totalActiveReports} mapped incidents (${analysis.nearBin15mPct}%) occurred within 15 metres of a bin, and ${weeklyEvidence.nearBin50mPct}% occurred within 50 metres — demonstrating that seafront and town-centre fouling is not caused by a "long walk to a bin".`;
-      } else if (selectedTemplateId === 'wheel_contamination') {
-        subject = `Footpath Accessibility Hazard: ${weeklyEvidence.highImpactCount} Buggy, Wheelchair & Pedestrian Contaminations in Greystones`;
-        introParagraph = `Residents have logged ${weeklyEvidence.totalReports} dog fouling incidents across Greystones (${weeklyEvidence.distinctSubmitters} verified anonymous resident tokens) — including ${analysis.bySeverity.wheelchair_wheels.count} wheelchair roll-throughs, ${analysis.bySeverity.buggy_wheels.count} buggy wheel contaminations, and ${analysis.bySeverity.stepped_in.count} pedestrian shoe hits.`;
-      } else if (selectedTemplateId === 'request_bin') {
-        subject = `Request for Dog-Waste Bins on Unserved Greystones Walking Routes (>200m from any bin)`;
-        introParagraph = `While Greystones town centre and South Beach Promenade have 16 general litter bins (where enforcement is the primary gap), our spatial audit shows 0 dedicated dog-waste bins in the town and >200m bin gaps on outer walking routes including Kindlestown Woods (445m to nearest bin), Charlesland Spine Path (910m), and the Cliff Walk trailhead (235m).`;
-      }
-
-      const latestFocusBlock = focusReport
-        ? `Logged Incident Reference (${focusReport.id.toUpperCase()} · Submitter ${focusReport.submitterToken}):
-• Location: ${focusReport.streetName} (${focusReport.lat.toFixed(4)}° N, ${Math.abs(focusReport.lng).toFixed(4)}° W)
-• Impact: ${SEVERITY_META[focusReport.severity].label}
-• Distance to Nearest Public Bin: ${focusReport.dBinAllM} metres (${focusReport.nearestBinCode})${
-            focusReport.note ? `\n• Note: "${focusReport.note}"` : ''
-          }`
-        : '';
-
-      const citationsBlock = activeCitations
-        .map((c) => `• ${c.code}: "${c.quote}"`)
-        .join('\n');
-
-      body = `Dear Councillors,
-
-${introParagraph}
-
-SUMMARY OF MAPPED GREYSTONES EVIDENCE:
-• Past 24 Hours (Active Window): ${weeklyEvidence.todayCount} reports
-• 7-Day Cumulative Total: ${weeklyEvidence.totalReports} incidents verified across ${weeklyEvidence.distinctSubmitters} distinct anonymous resident devices
-• Bin Proximity (Spatial Audit): ${analysis.nearBin15mPct}% (${analysis.nearBin15mCount} reports) are within 15m of a bin; ${weeklyEvidence.nearBin50mPct}% are within 50m of a bin.
-• Direct Wheel & Footwear Impact: ${weeklyEvidence.highImpactCount} incidents involved wheelchair wheels (${analysis.bySeverity.wheelchair_wheels.count}), buggy wheels (${analysis.bySeverity.buggy_wheels.count}), or pedestrians stepping in waste (${analysis.bySeverity.stepped_in.count}).
-• Primary Hotspots: ${weeklyEvidence.topHotspots.map((h) => `${h.streetName} (${h.count})`).join(', ') || topHotspot}
-• Unserved Outer Routes (>200m from a bin): Kindlestown Woods, Charlesland Spine Path, and Cliff Walk Start (${analysis.gt200mCount} reports).
-
-${latestFocusBlock}
-
-STATUTORY & POLICY BASIS:
-${citationsBlock}
-
-REQUESTED ACTION AT THE NEXT GREYSTONES MD MEETING:
-1. Targeted Warden Patrols: Deploy authorised litter/dog wardens and Greystones parking wardens during peak dog-walking windows (Sat/Sun 08:00–13:00) on South Beach Promenade, Harbour Marina, and Church Road to enforce the €250 on-the-spot fine.
-2. Bin Gaps on Outer Walks: Install dedicated dog-waste bins at Kindlestown, Charlesland, and the Cliff Walk start.
-3. Transparent Reporting: Separately record and publish s.22 dog-fouling fines issued in Greystones Municipal District.
-
-Kind regards,
-${residentSignOff || 'A concerned Greystones resident'}
-(Anonymous Verification ID: ${submitterToken})`;
     }
 
     const mailtoHref = `mailto:${toEmails.join(',')}?cc=${encodeURIComponent(
@@ -877,6 +930,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
     residentSignOff,
     submitterToken,
     includeLiveEvidenceStats,
+    customEmailBody,
   ]);
 
   const handleCopyFullEmail = async () => {
@@ -951,6 +1005,10 @@ ${residentSignOff || 'A concerned Greystones resident'}
       <AdminBackendView
         liveReports={reports}
         civicEvents={civicEvents}
+        bins={bins}
+        onSaveBin={handleSaveBin}
+        onDeleteBin={handleDeleteBin}
+        onResetBins={handleResetBins}
         demoSeedCleared={!hasDemoSeeds}
         onToggleClearDemoSeed={handleToggleDemoSeedsFromAdmin}
         onDeleteReport={handleDeleteSingleReport}
@@ -2328,7 +2386,7 @@ ${residentSignOff || 'A concerned Greystones resident'}
 
                 {/* 1. Template Choice */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-ink">1. Select Template</label>
+                  <label className="text-xs font-semibold text-ink">1. Email Option</label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {EMAIL_TEMPLATES.map((tpl) => {
                       const active = selectedTemplateId === tpl.id;
@@ -2339,12 +2397,15 @@ ${residentSignOff || 'A concerned Greystones resident'}
                           onClick={() => setSelectedTemplateId(tpl.id)}
                           className={`p-3 rounded-xl text-left border transition-colors ${
                             active
-                              ? 'border-primary bg-primary/5'
+                              ? 'border-primary bg-primary/5 ring-1 ring-primary'
                               : 'border-line bg-white hover:bg-canvas'
                           }`}
                         >
-                          <p className="text-xs font-bold text-ink">{tpl.label}</p>
-                          <p className="text-[11px] text-muted mt-0.5">{tpl.shortDesc}</p>
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-bold text-ink">{tpl.label}</p>
+                            {active && <span className="text-primary text-xs font-bold">✓</span>}
+                          </div>
+                          <p className="text-[11px] text-muted mt-1 leading-relaxed">{tpl.shortDesc}</p>
                         </button>
                       );
                     })}
@@ -2433,6 +2494,31 @@ ${residentSignOff || 'A concerned Greystones resident'}
                   </div>
                 </div>
 
+                {/* Custom Message input when Write Your Own is selected */}
+                {selectedTemplateId === 'write_your_own' ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label htmlFor="custom-body" className="text-xs font-semibold text-ink">
+                        Your Message to Councillors
+                      </label>
+                      <span className="text-[11px] text-muted font-normal">
+                        All 6 councillors prefilled
+                      </span>
+                    </div>
+                    <textarea
+                      id="custom-body"
+                      rows={6}
+                      value={customEmailBody}
+                      onChange={(e) => setCustomEmailBody(e.target.value)}
+                      placeholder="Dear Councillor,&#10;&#10;I want to raise an issue with dog fouling in our area..."
+                      className="w-full rounded-xl border border-line p-3 text-xs text-ink bg-white focus:outline-none focus:ring-1 focus:ring-primary leading-relaxed"
+                    />
+                    <p className="text-[11px] text-muted">
+                      💡 Tip: You can type your message above or leave it blank to write directly in your mail app. Tapping <strong>Open in Your Email App</strong> will prefill all 6 councillors' email addresses.
+                    </p>
+                  </div>
+                ) : null}
+
                 {/* Sign-off */}
                 <div className="space-y-1">
                   <label htmlFor="sign-off" className="text-xs font-semibold text-ink">
@@ -2444,23 +2530,24 @@ ${residentSignOff || 'A concerned Greystones resident'}
                     value={residentSignOff}
                     onChange={(e) => setResidentSignOff(e.target.value)}
                     className="w-full rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                    placeholder="e.g. Mary Kelly, Charlesland"
                   />
-                  {selectedTemplateId === 'practical_action' && (
-                    <label className="flex items-center gap-2 cursor-pointer text-xs text-muted hover:text-ink select-none pt-1">
-                      <input
-                        type="checkbox"
-                        checked={includeLiveEvidenceStats}
-                        onChange={(e) => setIncludeLiveEvidenceStats(e.target.checked)}
-                        className="rounded border-line text-primary focus:ring-primary h-3.5 w-3.5"
-                      />
-                      <span>Append live community map stats snapshot ({analysis.totalActiveReports} reports)</span>
-                    </label>
-                  )}
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-muted hover:text-ink select-none pt-1">
+                    <input
+                      type="checkbox"
+                      checked={includeLiveEvidenceStats}
+                      onChange={(e) => setIncludeLiveEvidenceStats(e.target.checked)}
+                      className="rounded border-line text-primary focus:ring-primary h-3.5 w-3.5"
+                    />
+                    <span>Append live community map stats snapshot ({analysis.totalActiveReports} reports)</span>
+                  </label>
                 </div>
 
                 {/* Email Preview */}
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-ink">Preview</label>
+                  <label className="text-xs font-semibold text-ink">
+                    {selectedTemplateId === 'write_your_own' ? 'Email Summary & Addressing' : 'Preview'}
+                  </label>
                   <div className="rounded-xl border border-line bg-canvas p-3 space-y-2">
                     <p className="text-xs font-bold text-ink">{generatedEmail.subject}</p>
                     <pre className="whitespace-pre-wrap font-sans text-xs text-ink leading-relaxed max-h-56 overflow-y-auto">

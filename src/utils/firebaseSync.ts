@@ -22,7 +22,7 @@ import {
   User,
   getIdTokenResult,
 } from 'firebase/auth';
-import { CivicActionEvent, DailyFoulingSnapshot, FoulingReport } from '../types';
+import { CivicActionEvent, DailyFoulingSnapshot, FoulingReport, PublicBin } from '../types';
 
 const env =
   (typeof import.meta !== 'undefined'
@@ -497,6 +497,90 @@ export async function clearAllCivicEventsFromCloud(): Promise<number> {
   } catch (err) {
     console.error('Failed to clear events from cloud:', err);
     throw err;
+  }
+}
+
+const BINS_COLLECTION = 'clean_greystones_bins';
+
+/**
+ * Real-time listener for verified public bins in Cloud Firestore.
+ */
+export function subscribeToCrowdsourcedBins(
+  onUpdate: (bins: PublicBin[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (!db) {
+    if (onError) onError(new Error('Firebase is not configured'));
+    return () => {};
+  }
+
+  const colRef = collection(db, BINS_COLLECTION);
+  const q = query(colRef, orderBy('code', 'asc'));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: PublicBin[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({
+          ...(docSnap.data() as PublicBin),
+          id: docSnap.id,
+        });
+      });
+      onUpdate(list);
+    },
+    (err) => {
+      console.warn('Bins subscription warning:', err);
+      if (onError) onError(err);
+    }
+  );
+}
+
+/**
+ * Saves or updates a public bin in the cloud backend (e.g. manually logged by administrator).
+ */
+export async function syncBinToCloud(bin: PublicBin): Promise<void> {
+  if (!db) return;
+  try {
+    const docRef = doc(db, BINS_COLLECTION, bin.id);
+    await setDoc(docRef, bin, { merge: true });
+  } catch (err) {
+    console.error('Failed to sync bin to cloud:', err);
+    throw err;
+  }
+}
+
+/**
+ * Deletes a public bin from the cloud backend.
+ */
+export async function deleteBinFromCloud(binId: string): Promise<void> {
+  if (!db) return;
+  try {
+    const docRef = doc(db, BINS_COLLECTION, binId);
+    await deleteDoc(docRef);
+  } catch (err) {
+    console.error('Failed to delete bin from cloud:', err);
+    throw err;
+  }
+}
+
+/**
+ * One-shot fetch of all registered bins from Cloud Firestore.
+ */
+export async function fetchBinsFromCloud(): Promise<PublicBin[]> {
+  if (!db) return [];
+  try {
+    const colRef = collection(db, BINS_COLLECTION);
+    const q = query(colRef, orderBy('code', 'asc'));
+    const snap = await getDocs(q);
+    const list: PublicBin[] = [];
+    snap.forEach((d) => {
+      list.push({ ...(d.data() as PublicBin), id: d.id });
+    });
+    return list;
+  } catch (err) {
+    console.warn('Failed to fetch bins from cloud:', err);
+    return [];
   }
 }
 

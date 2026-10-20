@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { User } from 'firebase/auth';
-import { CivicActionEvent, CivicAppStream, FoulingReport } from '../types';
+import {
+  BinKind,
+  BinStatus,
+  CivicActionEvent,
+  CivicAppStream,
+  FoulingReport,
+  PublicBin,
+} from '../types';
+import { INITIAL_PUBLIC_BINS } from '../data/greystonesData';
 import { computeBinsVsFoulingAnalysis } from '../utils/graphEngine';
 import { computeProductMetrics } from '../utils/productMetrics';
 import {
@@ -26,6 +34,10 @@ import {
 interface AdminBackendViewProps {
   liveReports: FoulingReport[];
   civicEvents?: CivicActionEvent[];
+  bins?: PublicBin[];
+  onSaveBin?: (bin: PublicBin) => Promise<void>;
+  onDeleteBin?: (binId: string) => Promise<void>;
+  onResetBins?: () => Promise<void>;
   demoSeedCleared: boolean;
   onToggleClearDemoSeed: () => void;
   onDeleteReport: (id: string) => void;
@@ -34,11 +46,15 @@ interface AdminBackendViewProps {
   defaultAppFilter?: AppStreamFilter;
 }
 
-type AdminTab = 'metrics' | 'seasonality' | 'diurnal' | 'cohorts' | 'ledger';
+type AdminTab = 'metrics' | 'seasonality' | 'diurnal' | 'cohorts' | 'ledger' | 'bins';
 
 export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   liveReports,
   civicEvents = [],
+  bins,
+  onSaveBin,
+  onDeleteBin,
+  onResetBins,
   demoSeedCleared,
   onToggleClearDemoSeed,
   onDeleteReport,
@@ -115,6 +131,202 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   const [showClearModal, setShowClearModal] = useState<boolean>(false);
   const [clearEventsFlag, setClearEventsFlag] = useState<boolean>(true);
   const [isClearingBackend, setIsClearingBackend] = useState<boolean>(false);
+
+  // Ground-Truth Public Bin Registry state
+  const [binList, setBinList] = useState<PublicBin[]>(() => bins ?? INITIAL_PUBLIC_BINS);
+
+  useEffect(() => {
+    if (bins && bins.length > 0) {
+      setBinList(bins);
+    }
+  }, [bins]);
+
+  // Auto-suggest next numerical bin code
+  const nextBinNumber = useMemo(() => {
+    const numbers = binList
+      .map((b) => {
+        const m = b.code.match(/#?G-(\d+)/i);
+        return m ? parseInt(m[1], 10) : 0;
+      })
+      .filter((n) => !isNaN(n));
+    return (numbers.length > 0 ? Math.max(...numbers) : 16) + 1;
+  }, [binList]);
+
+  // Form state for adding/editing bins
+  const [binCode, setBinCode] = useState<string>(() => `Bin #G-${nextBinNumber}`);
+  const [binLocationName, setBinLocationName] = useState<string>('');
+  const [binLat, setBinLat] = useState<string>('53.14433');
+  const [binLng, setBinLng] = useState<string>('-6.06052');
+  const [binKind, setBinKind] = useState<BinKind>('general');
+  const [binStatus, setBinStatus] = useState<BinStatus>('verified');
+  const [binCapacity, setBinCapacity] = useState<'EMPTY' | 'SERVICED' | 'OVERFLOWING'>('SERVICED');
+  const [binSource, setBinSource] = useState<'council' | 'crowd' | 'osm'>('council');
+  const [binNote, setBinNote] = useState<string>('');
+  const [editingBinId, setEditingBinId] = useState<string | null>(null);
+  const [isSavingBin, setIsSavingBin] = useState<boolean>(false);
+  const [isGpsLocating, setIsGpsLocating] = useState<boolean>(false);
+
+  // Filter state for bin table
+  const [binSearch, setBinSearch] = useState<string>('');
+  const [binKindFilter, setBinKindFilter] = useState<string>('ALL');
+  const [binStatusFilter, setBinStatusFilter] = useState<string>('ALL');
+
+  const handleUseGpsForBin = () => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setExportToast('Geolocation is not supported by your browser.');
+      setTimeout(() => setExportToast(null), 3500);
+      return;
+    }
+    setIsGpsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setBinLat(pos.coords.latitude.toFixed(6));
+        setBinLng(pos.coords.longitude.toFixed(6));
+        setIsGpsLocating(false);
+        setExportToast(
+          `📍 GPS coordinates captured: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`
+        );
+        setTimeout(() => setExportToast(null), 3500);
+      },
+      (err) => {
+        setIsGpsLocating(false);
+        setExportToast(`GPS lookup error: ${err.message}`);
+        setTimeout(() => setExportToast(null), 3500);
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  };
+
+  const handleSaveBinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!binCode.trim() || !binLocationName.trim()) {
+      setExportToast('Please enter both a bin code and location name.');
+      setTimeout(() => setExportToast(null), 4000);
+      return;
+    }
+    const latNum = parseFloat(binLat);
+    const lngNum = parseFloat(binLng);
+    if (isNaN(latNum) || isNaN(lngNum)) {
+      setExportToast('Invalid coordinates. Please enter decimal latitude and longitude.');
+      setTimeout(() => setExportToast(null), 4000);
+      return;
+    }
+
+    setIsSavingBin(true);
+    try {
+      const binToSave: PublicBin = {
+        id: editingBinId || `bin-manual-${Date.now()}`,
+        code: binCode.trim(),
+        locationName: binLocationName.trim(),
+        lat: latNum,
+        lng: lngNum,
+        kind: binKind,
+        status: binStatus,
+        capacityStatus: binCapacity,
+        source: binSource,
+        yesVotes: 1,
+        noVotes: 0,
+        lastConfirmedAt: new Date().toISOString(),
+        note: binNote.trim() || undefined,
+        addedBy: firebaseUser?.email || 'admin',
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (onSaveBin) {
+        await onSaveBin(binToSave);
+      }
+
+      setBinList((prev) => {
+        const idx = prev.findIndex((b) => b.id === binToSave.id);
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = binToSave;
+          return updated;
+        }
+        return [...prev, binToSave];
+      });
+
+      setExportToast(`✓ ${binToSave.code} saved to ground-truth bin registry.`);
+      setTimeout(() => setExportToast(null), 4000);
+
+      // Reset form
+      setEditingBinId(null);
+      setBinCode(`Bin #G-${nextBinNumber + 1}`);
+      setBinLocationName('');
+      setBinNote('');
+    } catch (err: unknown) {
+      console.error('Failed to save bin:', err);
+      const msg = err instanceof Error ? err.message : 'Error saving bin to registry.';
+      setExportToast(`Save error: ${msg}`);
+      setTimeout(() => setExportToast(null), 4000);
+    } finally {
+      setIsSavingBin(false);
+    }
+  };
+
+  const handleStartEditBin = (b: PublicBin) => {
+    setEditingBinId(b.id);
+    setBinCode(b.code);
+    setBinLocationName(b.locationName);
+    setBinLat(String(b.lat));
+    setBinLng(String(b.lng));
+    setBinKind(b.kind);
+    setBinStatus(b.status);
+    setBinCapacity(b.capacityStatus || 'SERVICED');
+    setBinSource(b.source);
+    setBinNote(b.note || '');
+    window.scrollTo({ top: 300, behavior: 'smooth' });
+  };
+
+  const handleCancelEditBin = () => {
+    setEditingBinId(null);
+    setBinCode(`Bin #G-${nextBinNumber}`);
+    setBinLocationName('');
+    setBinNote('');
+  };
+
+  const handleToggleVerifyBin = async (b: PublicBin) => {
+    const updated: PublicBin = {
+      ...b,
+      status: b.status === 'verified' ? 'unverified' : 'verified',
+      updatedAt: new Date().toISOString(),
+    };
+    if (onSaveBin) await onSaveBin(updated);
+    setBinList((prev) => prev.map((item) => (item.id === b.id ? updated : item)));
+    setExportToast(`Updated ${b.code} status to ${updated.status}.`);
+    setTimeout(() => setExportToast(null), 3000);
+  };
+
+  const handleDeleteBinClick = async (binId: string) => {
+    const target = binList.find((b) => b.id === binId);
+    if (!target) return;
+    if (
+      !confirm(
+        `Are you sure you want to remove ${target.code} (${target.locationName}) from the verified registry?`
+      )
+    ) {
+      return;
+    }
+    if (onDeleteBin) await onDeleteBin(binId);
+    setBinList((prev) => prev.filter((b) => b.id !== binId));
+    setExportToast(`Removed ${target.code} from registry.`);
+    setTimeout(() => setExportToast(null), 3000);
+  };
+
+  const filteredBins = useMemo(() => {
+    return binList.filter((b) => {
+      if (binKindFilter !== 'ALL' && b.kind !== binKindFilter) return false;
+      if (binStatusFilter !== 'ALL' && b.status !== binStatusFilter) return false;
+      if (binSearch.trim()) {
+        const q = binSearch.toLowerCase();
+        const matchesCode = b.code.toLowerCase().includes(q);
+        const matchesName = b.locationName.toLowerCase().includes(q);
+        const matchesNote = b.note?.toLowerCase().includes(q) ?? false;
+        if (!matchesCode && !matchesName && !matchesNote) return false;
+      }
+      return true;
+    });
+  }, [binList, binKindFilter, binStatusFilter, binSearch]);
 
   const lockoutState = useMemo(() => getAdminLockoutState(), [loginError]);
 
@@ -640,6 +852,7 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               { id: 'diurnal', label: '3. Weekend & Time' },
               { id: 'cohorts', label: '4. Tokens & Zones' },
               { id: 'ledger', label: `5. Incident Ledger (${combinedDataset.length})` },
+              { id: 'bins', label: `6. Ground-Truth Bins (${binList.length})` },
             ] as { id: AdminTab; label: string }[]
           ).map((t) => (
             <button
@@ -1974,6 +2187,411 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
                   })}
                 </tbody>
               </table>
+            </div>
+          </section>
+        )}
+
+        {/* 6. GROUND-TRUTH BIN REGISTRY & MANUAL LOGGING */}
+        {activeTab === 'bins' && (
+          <section className="space-y-6">
+            {/* Header & Mission */}
+            <div className="bg-white rounded-2xl border border-line p-5 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-canvas border border-line text-[11px] font-mono font-semibold text-primary mb-1.5">
+                    <span>🗑️</span> GROUND-TRUTH BIN REGISTRY
+                  </div>
+                  <h2 className="text-base sm:text-lg font-bold text-ink tracking-tight">
+                    Manual Bin Location Logging & Verification
+                  </h2>
+                  <p className="text-xs text-muted mt-1 leading-relaxed max-w-2xl">
+                    Log physical litter & dog waste bins directly on the ground. Eliminates reliance on inaccurate or unverified third-party scrapes. Nearest-bin calculations, distances, and 50m near-bin stats recalculate dynamically based on these verified locations.
+                  </p>
+                </div>
+                {onResetBins && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        confirm(
+                          'Reset all bins to default verified seed data? Any manual additions will be replaced.'
+                        )
+                      ) {
+                        onResetBins();
+                        setBinList(INITIAL_PUBLIC_BINS);
+                        setExportToast('Reset bins to verified default seed.');
+                        setTimeout(() => setExportToast(null), 3000);
+                      }
+                    }}
+                    className="self-start sm:self-auto px-3 py-1.5 text-xs font-semibold rounded-xl border border-line hover:bg-canvas text-muted hover:text-ink transition"
+                  >
+                    Reset to Default Seed
+                  </button>
+                )}
+              </div>
+
+              {/* Quick Stat Scorecards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-line">
+                <div className="p-3 rounded-xl bg-canvas border border-line">
+                  <p className="text-[11px] text-muted font-medium">Total Bins</p>
+                  <p className="text-lg font-bold text-ink mt-0.5">{binList.length}</p>
+                  <p className="text-[10px] text-muted">active in system</p>
+                </div>
+                <div className="p-3 rounded-xl bg-canvas border border-line">
+                  <p className="text-[11px] text-muted font-medium">Verified Ground-Truth</p>
+                  <p className="text-lg font-bold text-primary mt-0.5">
+                    {binList.filter((b) => b.status === 'verified').length}
+                  </p>
+                  <p className="text-[10px] text-muted">confirmed in place</p>
+                </div>
+                <div className="p-3 rounded-xl bg-canvas border border-line">
+                  <p className="text-[11px] text-muted font-medium">Dog Waste Bins</p>
+                  <p className="text-lg font-bold text-ink mt-0.5">
+                    {binList.filter((b) => b.kind === 'dog_waste').length}
+                  </p>
+                  <p className="text-[10px] text-muted">dedicated canine units</p>
+                </div>
+                <div className="p-3 rounded-xl bg-canvas border border-line">
+                  <p className="text-[11px] text-muted font-medium">General Litter Bins</p>
+                  <p className="text-lg font-bold text-ink mt-0.5">
+                    {binList.filter((b) => b.kind === 'general').length}
+                  </p>
+                  <p className="text-[10px] text-muted">mixed public bins</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Manual Bin Entry / Edit Form */}
+            <div className="bg-white rounded-2xl border border-line p-5 shadow-xs">
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-line">
+                <div>
+                  <h3 className="font-bold text-sm text-ink flex items-center gap-2">
+                    <span>{editingBinId ? '✏️' : '➕'}</span>
+                    <span>{editingBinId ? 'Edit Bin Location' : 'Log Public Bin Location Manually'}</span>
+                  </h3>
+                  <p className="text-xs text-muted mt-0.5">
+                    {editingBinId
+                      ? 'Update coordinates, kind, or operational status for this bin.'
+                      : 'Capture a physical bin on the ground using GPS or enter manual coordinates.'}
+                  </p>
+                </div>
+                {editingBinId && (
+                  <button
+                    type="button"
+                    onClick={handleCancelEditBin}
+                    className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-line text-muted hover:text-ink"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleSaveBinSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-ink mb-1">
+                      Bin Identifier / Code *
+                    </label>
+                    <input
+                      type="text"
+                      value={binCode}
+                      onChange={(e) => setBinCode(e.target.value)}
+                      placeholder="e.g. Bin #G-17"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                      required
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-ink mb-1">
+                      Location / Street Description *
+                    </label>
+                    <input
+                      type="text"
+                      value={binLocationName}
+                      onChange={(e) => setBinLocationName(e.target.value)}
+                      placeholder="e.g. Cliff Walk Trailhead (South Path Gate)"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-ink">Latitude *</label>
+                      <button
+                        type="button"
+                        onClick={handleUseGpsForBin}
+                        disabled={isGpsLocating}
+                        className="text-[10px] font-semibold text-primary hover:underline flex items-center gap-1"
+                      >
+                        <span>{isGpsLocating ? 'Capturing…' : '📍 Use My GPS'}</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={binLat}
+                      onChange={(e) => setBinLat(e.target.value)}
+                      placeholder="53.14433"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-ink mb-1">Longitude *</label>
+                    <input
+                      type="text"
+                      value={binLng}
+                      onChange={(e) => setBinLng(e.target.value)}
+                      placeholder="-6.06052"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-ink mb-1">Bin Type / Kind</label>
+                    <select
+                      value={binKind}
+                      onChange={(e) => setBinKind(e.target.value as BinKind)}
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="general">General Litter Bin</option>
+                      <option value="dog_waste">Dedicated Dog Waste Bin</option>
+                      <option value="bag_dispenser">Dog Bag Dispenser</option>
+                      <option value="recycling">Recycling Bring-Bank</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-ink mb-1">Verification Status</label>
+                    <select
+                      value={binStatus}
+                      onChange={(e) => setBinStatus(e.target.value as BinStatus)}
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="verified">Verified on Ground</option>
+                      <option value="unverified">Unverified (Pending Audit)</option>
+                      <option value="disputed">Disputed Location</option>
+                      <option value="removed">Removed / Decommissioned</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-ink mb-1">Capacity State</label>
+                    <select
+                      value={binCapacity}
+                      onChange={(e) =>
+                        setBinCapacity(e.target.value as 'EMPTY' | 'SERVICED' | 'OVERFLOWING')
+                      }
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="EMPTY">Empty / Recently Emptied</option>
+                      <option value="SERVICED">Normal / Serviced</option>
+                      <option value="OVERFLOWING">Overflowing / Urgent</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-ink mb-1">Data Source</label>
+                    <select
+                      value={binSource}
+                      onChange={(e) => setBinSource(e.target.value as 'council' | 'crowd' | 'osm')}
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="council">Council Log / Municipal MD</option>
+                      <option value="crowd">Citizen / Resident Verified</option>
+                      <option value="osm">OpenStreetMap Data</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink mb-1">
+                    Auditor Notes (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={binNote}
+                    onChange={(e) => setBinNote(e.target.value)}
+                    placeholder="e.g. Mounted on wooden signpost near pedestrian crossing"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSavingBin}
+                    className="px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition shadow-xs flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <span>{isSavingBin ? 'Saving Bin…' : editingBinId ? 'Update Bin' : 'Save Bin to Registry'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Filterable Bin Table */}
+            <div className="bg-white rounded-2xl border border-line p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-sm text-ink">
+                    Registered Public Bins ({filteredBins.length} of {binList.length})
+                  </h3>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={binSearch}
+                    onChange={(e) => setBinSearch(e.target.value)}
+                    placeholder="Search code or street…"
+                    className="px-3 py-1.5 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-1 focus:ring-primary w-40 sm:w-48"
+                  />
+                  <select
+                    value={binKindFilter}
+                    onChange={(e) => setBinKindFilter(e.target.value)}
+                    className="px-2.5 py-1.5 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none"
+                  >
+                    <option value="ALL">All Types</option>
+                    <option value="general">General</option>
+                    <option value="dog_waste">Dog Waste</option>
+                    <option value="bag_dispenser">Dispenser</option>
+                    <option value="recycling">Recycling</option>
+                  </select>
+                  <select
+                    value={binStatusFilter}
+                    onChange={(e) => setBinStatusFilter(e.target.value)}
+                    className="px-2.5 py-1.5 text-xs rounded-xl border border-line bg-canvas text-ink focus:outline-none"
+                  >
+                    <option value="ALL">All Status</option>
+                    <option value="verified">Verified</option>
+                    <option value="unverified">Unverified</option>
+                    <option value="removed">Removed</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-line text-muted font-medium">
+                      <th className="pb-2 font-semibold">Code</th>
+                      <th className="pb-2 font-semibold">Location</th>
+                      <th className="pb-2 font-semibold">Coordinates</th>
+                      <th className="pb-2 font-semibold">Type</th>
+                      <th className="pb-2 font-semibold">Status</th>
+                      <th className="pb-2 font-semibold">Capacity</th>
+                      <th className="pb-2 font-semibold text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {filteredBins.map((b) => (
+                      <tr key={b.id} className="hover:bg-canvas/50 transition">
+                        <td className="py-2.5 pr-2 font-mono font-bold text-ink whitespace-nowrap">
+                          {b.code}
+                        </td>
+                        <td className="py-2.5 pr-2">
+                          <p className="font-medium text-ink">{b.locationName}</p>
+                          {b.note && <p className="text-[11px] text-muted italic">{b.note}</p>}
+                        </td>
+                        <td className="py-2.5 pr-2 font-mono text-[11px] text-muted whitespace-nowrap">
+                          <a
+                            href={`https://www.google.com/maps?q=${b.lat},${b.lng}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="hover:underline text-primary"
+                            title="View on Google Maps"
+                          >
+                            {b.lat.toFixed(5)}, {b.lng.toFixed(5)} ↗
+                          </a>
+                        </td>
+                        <td className="py-2.5 pr-2 whitespace-nowrap">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                              b.kind === 'dog_waste'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : b.kind === 'bag_dispenser'
+                                ? 'bg-sky-50 text-sky-800 border-sky-200'
+                                : b.kind === 'recycling'
+                                ? 'bg-purple-50 text-purple-800 border-purple-200'
+                                : 'bg-canvas text-ink border-line'
+                            }`}
+                          >
+                            {b.kind === 'dog_waste'
+                              ? '🐶 Dog Waste'
+                              : b.kind === 'bag_dispenser'
+                              ? '🎒 Dispenser'
+                              : b.kind === 'recycling'
+                              ? '♻️ Bring Bank'
+                              : '🗑️ General'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-2 whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleVerifyBin(b)}
+                            title="Click to toggle verified status"
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                              b.status === 'verified'
+                                ? 'bg-green-50 text-primary border-green-200 hover:bg-green-100'
+                                : b.status === 'removed'
+                                ? 'bg-red-50 text-error border-red-200 hover:bg-red-100'
+                                : 'bg-yellow-50 text-yellow-800 border-yellow-200 hover:bg-yellow-100'
+                            }`}
+                          >
+                            {b.status === 'verified'
+                              ? '✓ Verified'
+                              : b.status === 'removed'
+                              ? '✕ Removed'
+                              : '⏳ Unverified'}
+                          </button>
+                        </td>
+                        <td className="py-2.5 pr-2 whitespace-nowrap">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                              b.capacityStatus === 'OVERFLOWING'
+                                ? 'bg-red-100 text-error font-bold'
+                                : 'text-muted'
+                            }`}
+                          >
+                            {b.capacityStatus || 'SERVICED'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditBin(b)}
+                              className="text-primary hover:underline font-semibold"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteBinClick(b.id)}
+                              className="text-error hover:underline font-semibold"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredBins.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-6 text-center text-muted">
+                          No public bins match your search or filter.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         )}

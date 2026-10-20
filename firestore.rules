@@ -80,6 +80,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Clean Greystones: Verified Public Bin Locations & Ground-Truth Registry
+    match /clean_greystones_bins/{binId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     // Civic Administrator Role Registry
     match /admin_roles/{userId} {
       allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());

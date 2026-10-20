@@ -773,33 +773,15 @@ export const VERIFIED_CITATIONS: LegalCitation[] = [
 export const EMAIL_TEMPLATES: EmailTemplateOption[] = [
   {
     id: 'practical_action',
-    label: 'Practical Solutions & Resources (Resident Call)',
-    shortDesc: 'Frustration over fouling, buggies/wheelchairs, 2 wardens for Wicklow & Tánaiste',
+    label: 'Prefilled Letter: Practical Solutions & Resources',
+    shortDesc: 'Prefilled letter demanding dog warden resources & enforcement. Just add your name.',
     intent: 'enforcement',
   },
   {
-    id: 'bin_mythbuster',
-    label: 'Council Myth-Buster: Fouling Beside Bins',
-    shortDesc: 'Cites exact % of fouling within 15m–50m of bins & demands warden enforcement',
-    intent: 'enforcement',
-  },
-  {
-    id: 'wheel_contamination',
-    label: 'Buggy & Wheelchair Wheel Hazard Alert',
-    shortDesc: 'Highlights direct contamination of prams, wheelchairs & footpaths',
-    intent: 'enforcement',
-  },
-  {
-    id: 'hotspot_evidence',
-    label: 'Polite Hotspot Evidence Dossier',
-    shortDesc: 'Data-led summary of top Greystones hotspots for next MD meeting',
+    id: 'write_your_own',
+    label: 'Write Your Own Email',
+    shortDesc: 'Opens your email app with all Greystones councillors prefilled so you can write your own words.',
     intent: 'general',
-  },
-  {
-    id: 'request_bin',
-    label: 'Request Dog Bin at Unserved Walk (>200m)',
-    shortDesc: 'Targets Cliff Walk, Kindlestown & Charlesland gaps with LMP 2026–2029 quote',
-    intent: 'bin_request',
   },
 ];
 
