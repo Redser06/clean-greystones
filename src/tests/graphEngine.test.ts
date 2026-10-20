@@ -27,6 +27,7 @@ import {
   INITIAL_REPORTS,
   VERIFIED_CITATIONS,
 } from '../data/greystonesData';
+import { PublicBin } from '../types';
 
 describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
   it('computes accurate Haversine distance in metres for South Beach Promenade pins near Bin #G-14', () => {
@@ -143,10 +144,43 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.ok(lines[0].includes('submitter_token,token_checksum_valid'));
   });
 
-  it('configures practical_action as the default primary councillor email template', () => {
+  it('configures practical_action as the default primary councillor email template and write_your_own as the only other option', () => {
+    assert.equal(EMAIL_TEMPLATES.length, 2);
     assert.equal(EMAIL_TEMPLATES[0].id, 'practical_action');
     assert.ok(EMAIL_TEMPLATES[0].label.includes('Practical Solutions'));
-    assert.ok(EMAIL_TEMPLATES[0].shortDesc.includes('2 wardens for Wicklow & Tánaiste'));
+    assert.equal(EMAIL_TEMPLATES[1].id, 'write_your_own');
+    assert.ok(EMAIL_TEMPLATES[1].label.includes('Write Your Own'));
+
+    // Old templates removed from frontend array
+    const templateIds = EMAIL_TEMPLATES.map((t) => t.id as string);
+    assert.equal(templateIds.includes('bin_mythbuster'), false);
+    assert.equal(templateIds.includes('wheel_contamination'), false);
+    assert.equal(templateIds.includes('hotspot_evidence'), false);
+    assert.equal(templateIds.includes('request_bin'), false);
+  });
+
+  it('supports manually logged bin locations and recalculates nearest bin distances dynamically', () => {
+    const manualBin: PublicBin = {
+      id: 'bin-cliff-walk-custom',
+      code: 'Bin #G-99',
+      lat: 53.151,
+      lng: -6.068,
+      locationName: 'Cliff Walk Start Trailhead (Manually Logged)',
+      kind: 'dog_waste',
+      source: 'council',
+      status: 'verified',
+      yesVotes: 1,
+      noVotes: 0,
+      lastConfirmedAt: '2026-10-20T21:00:00Z',
+      capacityStatus: 'EMPTY',
+    };
+
+    const combinedBins = [...INITIAL_PUBLIC_BINS, manualBin];
+    const nearest = findNearestBins(53.1509, -6.0679, combinedBins);
+
+    assert.equal(nearest.nearestVerified.id, 'bin-cliff-walk-custom');
+    assert.equal(nearest.nearestVerified.code, 'Bin #G-99');
+    assert.ok(nearest.dBinVerifiedM < 25, `Expected distance < 25m, got ${nearest.dBinVerifiedM}m`);
   });
 
   it('supports accidental report deletion: removes report and updates hotspot metrics cleanly', () => {

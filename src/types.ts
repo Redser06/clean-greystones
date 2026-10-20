@@ -53,6 +53,9 @@ export interface PublicBin {
   noVotes: number;
   lastConfirmedAt: string;
   capacityStatus?: 'EMPTY' | 'SERVICED' | 'OVERFLOWING';
+  note?: string;
+  addedBy?: string;
+  updatedAt?: string;
 }
 
 export interface Councillor {
@@ -98,6 +101,7 @@ export interface HansardRecord {
 
 export type EmailTemplateId =
   | 'practical_action'
+  | 'write_your_own'
   | 'hotspot_evidence'
   | 'bin_mythbuster'
   | 'wheel_contamination'
