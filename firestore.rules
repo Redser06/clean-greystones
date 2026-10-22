@@ -42,30 +42,42 @@ service cloud.firestore {
     }
 
     // ProtoFleet Hub: Serverless Multi-Agent Registry & Telemetry
+    // Public read-only; mutations strictly restricted to verified administrators.
     match /protofleet_state/{docId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     match /protofleet_deployments/{slug} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     match /protofleet_events/{eventId} {
-      allow read, create: if true;
-      allow update, delete: if false;
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isAdmin();
     }
 
     // Clean Greystones: Crowdsourced Civic Dog Fouling Reports
-    // Public crowdsourced reports can be read, created, or updated (corroborations / soft-deletes).
-    // Hard deletions (such as administrative database wipes) are strictly restricted to administrators.
+    // Public crowdsourced reports can be read and created.
+    // Non-admin updates are strictly limited to incrementing the confirmation count.
+    // Modifications of other fields, soft-deletes (status='deleted'), and hard deletes are restricted to admins.
     match /clean_greystones_reports/{reportId} {
-      allow read, create, update: if true;
+      allow read, create: if true;
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations']) &&
+        request.resource.data.confirmations is number &&
+        request.resource.data.confirmations > resource.data.confirmations
+      );
       allow delete: if isAdmin();
     }
 
     // Clean Greystones: 24-hour Daily Summaries & Snapshots
+    // Public read-only; writes strictly restricted to verified administrators.
     match /clean_greystones_snapshots/{dateId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     // Clean Greystones: Civic Action & Analytics Events (Council emails, button clicks)
@@ -76,7 +88,12 @@ service cloud.firestore {
 
     // Fix Greystones Roads: Crowdsourced Sister App Hazard Reports
     match /greystones_roads_reports/{reportId} {
-      allow read, create, update: if true;
+      allow read, create: if true;
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations']) &&
+        request.resource.data.confirmations is number &&
+        request.resource.data.confirmations > resource.data.confirmations
+      );
       allow delete: if isAdmin();
     }
 

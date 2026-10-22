@@ -15,7 +15,6 @@ import {
   AppStreamFilter,
   computeTemporalAndSeasonalModel,
   exportReportsToCsv,
-  getAdminLockoutState,
   getReportSeverityDisplay,
   HISTORICAL_DOG_FOULING_COHORT,
   HISTORICAL_ROADS_COHORT,
@@ -23,7 +22,6 @@ import {
   isAdminSessionActive,
   isValidAnyCivicToken,
   setAdminSessionActive,
-  verifyAdminPasscodeSecure,
 } from '../utils/adminAnalytics';
 import {
   signInAdminWithFirebase,
@@ -96,10 +94,8 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() =>
     isAdminSessionActive()
   );
-  const [loginMode, setLoginMode] = useState<'firebase' | 'passcode'>('firebase');
   const [adminEmail, setAdminEmail] = useState<string>('admin@cleangreystones.ie');
   const [adminPassword, setAdminPassword] = useState<string>('');
-  const [passcodeInput, setPasscodeInput] = useState<string>('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
@@ -328,42 +324,23 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
     });
   }, [binList, binKindFilter, binStatusFilter, binSearch]);
 
-  const lockoutState = useMemo(() => getAdminLockoutState(), [loginError]);
-
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoggingIn(true);
     setLoginError(null);
     try {
-      if (loginMode === 'firebase') {
-        if (!adminEmail.trim() || !adminPassword.trim()) {
-          setLoginError('Please enter both administrator email and password.');
-          setIsLoggingIn(false);
-          return;
-        }
-        const user = await signInAdminWithFirebase(adminEmail, adminPassword);
-        setFirebaseUser(user);
-        setIsFirebaseAdmin(true);
-        setAdminSessionActive(true);
-        setIsAuthenticated(true);
-        setLoginError(null);
-        setAdminPassword('');
-      } else {
-        if (!passcodeInput.trim()) {
-          setLoginError('Please enter an organiser access key.');
-          setIsLoggingIn(false);
-          return;
-        }
-        const res = await verifyAdminPasscodeSecure(passcodeInput);
-        if (res.ok) {
-          setAdminSessionActive(true);
-          setIsAuthenticated(true);
-          setLoginError(null);
-          setPasscodeInput('');
-        } else {
-          setLoginError(res.error || 'Invalid administrator credentials.');
-        }
+      if (!adminEmail.trim() || !adminPassword.trim()) {
+        setLoginError('Please enter both administrator email and password.');
+        setIsLoggingIn(false);
+        return;
       }
+      const user = await signInAdminWithFirebase(adminEmail, adminPassword);
+      setFirebaseUser(user);
+      setIsFirebaseAdmin(true);
+      setAdminSessionActive(true);
+      setIsAuthenticated(true);
+      setLoginError(null);
+      setAdminPassword('');
     } catch (err: unknown) {
       const msg =
         err instanceof Error
@@ -378,7 +355,6 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
   const handleLogout = async () => {
     setAdminSessionActive(false);
     setIsAuthenticated(false);
-    setPasscodeInput('');
     setAdminPassword('');
     try {
       await signOutAdminFromFirebase();
@@ -598,122 +574,48 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
               weekend spike, and diurnal time-of-day models.
             </p>
 
-            {lockoutState.isLocked && (
-              <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-error text-xs flex items-center gap-2">
-                <span className="text-base">🔒</span>
-                <div>
-                  <p className="font-bold">Security Lockout Active</p>
-                  <p className="text-[11px] text-red-700">
-                    Too many consecutive failed login attempts. Access is locked for{' '}
-                    <strong>{Math.ceil(lockoutState.remainingMs / 60000)} minute(s)</strong> to protect the municipal database.
-                  </p>
-                </div>
+            <form onSubmit={handleLoginSubmit} className="space-y-4 mt-6">
+              <div>
+                <label
+                  htmlFor="admin-email"
+                  className="block text-xs font-semibold text-ink mb-1.5"
+                >
+                  Administrator Email
+                </label>
+                <input
+                  id="admin-email"
+                  type="email"
+                  disabled={isLoggingIn}
+                  value={adminEmail}
+                  onChange={(e) => {
+                    setAdminEmail(e.target.value);
+                    if (loginError) setLoginError(null);
+                  }}
+                  placeholder="admin@cleangreystones.ie"
+                  className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  autoFocus
+                />
               </div>
-            )}
-
-            <div className="flex rounded-xl bg-canvas p-1 border border-line mt-6 mb-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginMode('firebase');
-                  setLoginError(null);
-                }}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                  loginMode === 'firebase'
-                    ? 'bg-white shadow-xs text-ink'
-                    : 'text-muted hover:text-ink'
-                }`}
-              >
-                Firebase Admin Auth
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginMode('passcode');
-                  setLoginError(null);
-                }}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                  loginMode === 'passcode'
-                    ? 'bg-white shadow-xs text-ink'
-                    : 'text-muted hover:text-ink'
-                }`}
-              >
-                Organiser Access Key
-              </button>
-            </div>
-
-            <form onSubmit={handleLoginSubmit} className="space-y-4">
-              {loginMode === 'firebase' ? (
-                <>
-                  <div>
-                    <label
-                      htmlFor="admin-email"
-                      className="block text-xs font-semibold text-ink mb-1.5"
-                    >
-                      Administrator Email
-                    </label>
-                    <input
-                      id="admin-email"
-                      type="email"
-                      disabled={isLoggingIn}
-                      value={adminEmail}
-                      onChange={(e) => {
-                        setAdminEmail(e.target.value);
-                        if (loginError) setLoginError(null);
-                      }}
-                      placeholder="admin@cleangreystones.ie"
-                      className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                      autoFocus
-                    />
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="admin-password"
-                      className="block text-xs font-semibold text-ink mb-1.5"
-                    >
-                      Administrator Password
-                    </label>
-                    <input
-                      id="admin-password"
-                      type="password"
-                      disabled={isLoggingIn}
-                      value={adminPassword}
-                      onChange={(e) => {
-                        setAdminPassword(e.target.value);
-                        if (loginError) setLoginError(null);
-                      }}
-                      placeholder="Enter administrator password…"
-                      className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                    />
-                  </div>
-                </>
-              ) : (
-                <div>
-                  <label
-                    htmlFor="admin-passcode"
-                    className="block text-xs font-semibold text-ink mb-1.5"
-                  >
-                    Organiser Access Key
-                  </label>
-                  <input
-                    id="admin-passcode"
-                    type="password"
-                    disabled={lockoutState.isLocked || isLoggingIn}
-                    value={passcodeInput}
-                    onChange={(e) => {
-                      setPasscodeInput(e.target.value);
-                      if (loginError) setLoginError(null);
-                    }}
-                    placeholder={
-                      lockoutState.isLocked
-                        ? 'Access temporarily locked…'
-                        : 'Enter organiser access key…'
-                    }
-                    className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink font-mono focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                    autoFocus={!lockoutState.isLocked}
-                  />
-                </div>
-              )}
+              <div>
+                <label
+                  htmlFor="admin-password"
+                  className="block text-xs font-semibold text-ink mb-1.5"
+                >
+                  Administrator Password
+                </label>
+                <input
+                  id="admin-password"
+                  type="password"
+                  disabled={isLoggingIn}
+                  value={adminPassword}
+                  onChange={(e) => {
+                    setAdminPassword(e.target.value);
+                    if (loginError) setLoginError(null);
+                  }}
+                  placeholder="Enter administrator password…"
+                  className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-canvas text-ink focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                />
+              </div>
 
               {loginError && (
                 <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-error font-medium">
@@ -723,28 +625,19 @@ export const AdminBackendView: React.FC<AdminBackendViewProps> = ({
 
               <button
                 type="submit"
-                disabled={
-                  isLoggingIn ||
-                  (loginMode === 'passcode' &&
-                    (lockoutState.isLocked || !passcodeInput.trim())) ||
-                  (loginMode === 'firebase' && (!adminEmail.trim() || !adminPassword.trim()))
-                }
+                disabled={isLoggingIn || !adminEmail.trim() || !adminPassword.trim()}
                 className="w-full py-2.5 px-4 rounded-xl bg-primary hover:bg-primary-container text-white font-semibold text-sm transition shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {isLoggingIn ? (
-                  <span>Verifying Credentials…</span>
-                ) : loginMode === 'firebase' ? (
-                  <span>Sign In with Firebase Admin Role</span>
+                  <span>Verifying Administrator Credentials…</span>
                 ) : (
-                  <span>Sign In with Organiser Key</span>
+                  <span>Sign In as Administrator</span>
                 )}
               </button>
 
               <div className="pt-3 border-t border-line text-center">
                 <p className="text-[11px] text-muted leading-relaxed">
-                  {loginMode === 'firebase'
-                    ? '🔒 Authenticated with Firebase Identity Platform and custom admin claims.'
-                    : '🔒 Protected with SHA-256 cryptographic hashing and brute-force rate-limiting.'}
+                  🔒 Authenticated with Firebase Identity Platform and restricted to verified administrator roles.
                 </p>
               </div>
             </form>
