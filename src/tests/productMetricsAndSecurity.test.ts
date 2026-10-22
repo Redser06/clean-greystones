@@ -28,15 +28,11 @@ if (typeof globalThis.window === 'undefined') {
 }
 
 import { computeProductMetrics } from '../utils/productMetrics';
+import * as adminAnalytics from '../utils/adminAnalytics';
 import {
-  verifyAdminPasscodeSecure,
   isAdminSessionActive,
   setAdminSessionActive,
-  getAdminLockoutState,
-  recordFailedAdminLogin,
-  resetAdminLockout,
-  computeSha256Hex,
-  AUTHORISED_ADMIN_HASHES,
+  SESSION_EXPIRATION_MS,
 } from '../utils/adminAnalytics';
 import {
   verifyUserAdminRole,
@@ -44,13 +40,18 @@ import {
 } from '../utils/firebaseSync';
 import type { User } from 'firebase/auth';
 import { CivicActionEvent, FoulingReport } from '../types';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
   const baseTime = new Date('2026-10-19T14:00:00Z');
   const nowMs = baseTime.getTime();
 
   beforeEach(() => {
-    resetAdminLockout();
     if (typeof window !== 'undefined' && window.sessionStorage) {
       window.sessionStorage.clear();
     }
@@ -187,44 +188,98 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
     assert.equal(metrics.highImpactPct, 67);
   });
 
-  it('verifies authorised admin passcodes securely via SHA-256 hashes', async () => {
-    // Dynamic test key registered by hash only (no plaintext keys in source code)
-    const testSecret = 'TEST-EPHEMERAL-KEY-99482';
-    const testHash = await computeSha256Hex(testSecret);
-    AUTHORISED_ADMIN_HASHES.add(testHash);
+  it('verifies that admin authentication relies exclusively on Firebase administrator role, having eliminated passcodes and static hashes', () => {
+    // 1. Module exports must NOT contain legacy passcode hashes or passcode verifiers
+    const exported = adminAnalytics as Record<string, unknown>;
+    assert.equal(exported.AUTHORISED_ADMIN_HASHES, undefined);
+    assert.equal(exported.verifyAdminPasscodeSecure, undefined);
+    assert.equal(exported.getAdminLockoutState, undefined);
+    assert.equal(exported.recordFailedAdminLogin, undefined);
+    assert.equal(exported.resetAdminLockout, undefined);
 
-    const validRes = await verifyAdminPasscodeSecure(testSecret);
-    assert.equal(validRes.ok, true);
-
-    AUTHORISED_ADMIN_HASHES.delete(testHash);
-
-    // Invalid passcode
-    const badRes = await verifyAdminPasscodeSecure('wrong-passcode-invalid');
-    assert.equal(badRes.ok, false);
+    // 2. Session expiration constant exists and enforces 2 hours
+    assert.equal(SESSION_EXPIRATION_MS, 2 * 60 * 60 * 1000);
   });
 
-  it('enforces brute-force lockout after 5 consecutive failed login attempts', async () => {
-    resetAdminLockout();
-    assert.equal(getAdminLockoutState().isLocked, false);
+  it('enforces Firestore database rules: reports can only be created or have confirmations added by public, while deletes, snapshot writes, and arbitrary edits require admin role', () => {
+    // Read the actual deployed firestore.rules file
+    const rulesPath = path.resolve(__dirname, '../../firestore.rules');
+    assert.ok(fs.existsSync(rulesPath), 'firestore.rules must exist');
+    const rulesContent = fs.readFileSync(rulesPath, 'utf-8');
 
-    // 4 failed attempts: not locked yet
-    for (let i = 0; i < 4; i++) {
-      recordFailedAdminLogin();
-      assert.equal(getAdminLockoutState().isLocked, false);
+    // Rule assertion 1: clean_greystones_reports update must be restricted to isAdmin or affectedKeys hasOnly confirmations
+    assert.ok(
+      rulesContent.includes("request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations'])"),
+      'Reports update rule must restrict non-admin updates strictly to confirmations'
+    );
+    assert.ok(
+      rulesContent.includes('request.resource.data.confirmations > resource.data.confirmations'),
+      'Confirmations update must strictly increment'
+    );
+
+    // Rule assertion 2: delete must be restricted to isAdmin
+    assert.ok(
+      rulesContent.includes('match /clean_greystones_reports/{reportId}'),
+      'Rules must contain clean_greystones_reports block'
+    );
+    const reportsBlock = rulesContent.slice(
+      rulesContent.indexOf('match /clean_greystones_reports/{reportId}'),
+      rulesContent.indexOf('match /clean_greystones_snapshots/{dateId}')
+    );
+    assert.ok(reportsBlock.includes('allow delete: if isAdmin();'), 'Reports delete must be restricted to isAdmin');
+
+    // Rule assertion 3: clean_greystones_snapshots writes must be restricted to isAdmin
+    const snapshotsBlock = rulesContent.slice(
+      rulesContent.indexOf('match /clean_greystones_snapshots/{dateId}'),
+      rulesContent.indexOf('match /clean_greystones_events/{eventId}')
+    );
+    assert.ok(snapshotsBlock.includes('allow write: if isAdmin();'), 'Snapshots write must be restricted to isAdmin');
+    assert.equal(snapshotsBlock.includes('allow read, write: if true;'), false, 'Snapshots write must not be open to public');
+
+    // Rule assertion 4: protofleet state and deployments writes must be restricted to isAdmin
+    assert.ok(
+      rulesContent.includes('match /protofleet_state/{docId} {\n      allow read: if true;\n      allow write: if isAdmin();'),
+      'protofleet_state write must be restricted to isAdmin'
+    );
+    assert.ok(
+      rulesContent.includes('match /protofleet_deployments/{slug} {\n      allow read: if true;\n      allow write: if isAdmin();'),
+      'protofleet_deployments write must be restricted to isAdmin'
+    );
+
+    // Functional evaluator simulating Firestore engine logic
+    function simulateReportUpdate(
+      isAdmin: boolean,
+      original: { confirmations: number; status: string; streetName: string },
+      updated: { confirmations: number; status: string; streetName: string }
+    ): boolean {
+      if (isAdmin) return true;
+      const affected = Object.keys(updated).filter(
+        (k) => (original as any)[k] !== (updated as any)[k]
+      );
+      return (
+        affected.length === 1 &&
+        affected[0] === 'confirmations' &&
+        typeof updated.confirmations === 'number' &&
+        updated.confirmations > original.confirmations
+      );
     }
 
-    // 5th failed attempt: triggers 15-minute lockout
-    recordFailedAdminLogin();
-    const lockedState = getAdminLockoutState();
-    assert.equal(lockedState.isLocked, true);
-    assert.ok(lockedState.remainingMs > 0);
+    const baseline = { confirmations: 1, status: 'spotted', streetName: 'Church Road' };
 
-    // Attempting login while locked immediately fails
-    const failWhileLocked = await verifyAdminPasscodeSecure('any-attempted-key');
-    assert.equal(failWhileLocked.ok, false);
-    assert.ok(failWhileLocked.error?.includes('lockout active'));
+    // Public incrementing confirmation: allowed
+    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 2 }), true);
 
-    resetAdminLockout();
+    // Public attempting to decrement confirmation: rejected
+    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 0 }), false);
+
+    // Public attempting to soft-delete by changing status: REJECTED (closes the security hole!)
+    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, status: 'deleted' }), false);
+
+    // Public attempting to tamper with street name: rejected
+    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, streetName: 'Fake St' }), false);
+
+    // Admin soft-delete or status change: allowed
+    assert.equal(simulateReportUpdate(true, baseline, { ...baseline, status: 'deleted' }), true);
   });
 
   it('verifies administrator roles via custom claims and administrator email allowlists', async () => {
