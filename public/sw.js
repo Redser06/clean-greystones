@@ -1,12 +1,15 @@
-const CACHE_NAME = 'clean-greystones-v1';
+const CACHE_NAME = 'clean-greystones-v2';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/favicon.ico',
   '/favicon.svg',
   '/icon-192.png',
   '/icon-512.png',
   '/apple-touch-icon.png',
+  '/logo.svg',
+  '/logo-horizontal.svg',
   '/osm_bins_2026-10-16.geojson'
 ];
 
