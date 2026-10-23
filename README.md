@@ -120,4 +120,4 @@ npm run build
 
 ## 📜 License & Governance
 
-Built for the community of Greystones, Co. Wicklow. Open-source, non-commercial civic initiative.
+Built for the community of Greystones, Co. Wicklow. Open-source, non-commercial civic initiative released under the [MIT License](LICENSE).
