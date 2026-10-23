@@ -2,6 +2,7 @@
   "name": "clean-greystones",
   "private": true,
   "version": "1.0.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
