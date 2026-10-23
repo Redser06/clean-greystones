@@ -37,6 +37,9 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
 
+  const onMapClickDropPinRef = useRef(onMapClickDropPin);
+  onMapClickDropPinRef.current = onMapClickDropPin;
+
   const [basemapStyle, setBasemapStyle] = useState<'google_streets' | 'google_hybrid' | 'clean_coastal'>('google_streets');
 
   const filteredReports = reports.filter((r) => {
@@ -71,7 +74,7 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
     const layerGroup = L.layerGroup().addTo(map);
 
     map.on('click', (e: L.LeafletMouseEvent) => {
-      onMapClickDropPin(
+      onMapClickDropPinRef.current(
         Number(e.latlng.lat.toFixed(6)),
         Number(e.latlng.lng.toFixed(6))
       );
@@ -243,9 +246,14 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
       zIndexOffset: 1000,
     });
 
+    draftMarker.on('click', (e) => {
+      L.DomEvent.stopPropagation(e);
+      onMapClickDropPinRef.current(draftCoords.lat, draftCoords.lng);
+    });
+
     draftMarker.on('dragend', () => {
       const pos = draftMarker.getLatLng();
-      onMapClickDropPin(Number(pos.lat.toFixed(6)), Number(pos.lng.toFixed(6)));
+      onMapClickDropPinRef.current(Number(pos.lat.toFixed(6)), Number(pos.lng.toFixed(6)));
     });
 
     draftMarker.addTo(layerGroup);

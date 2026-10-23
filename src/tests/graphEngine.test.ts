@@ -233,5 +233,45 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.ok(outside.streetName.includes('Current Location (53.3498° N, 6.2603° W)'));
     assert.equal(outside.areaName, 'Current Location');
   });
+
+  it('accurately resolves distinct segments along the Charlesland Spine when moving the pin', () => {
+    // 1. SuperValu / R774 North Roundabout
+    const north = inferGreystonesLocation(53.1365, -6.0662);
+    assert.equal(north.areaName, 'Charlesland');
+    assert.equal(north.streetName, 'Charlesland Spine (SuperValu & R774 Roundabout)');
+
+    // 2. Court & Park Walkway
+    const court = inferGreystonesLocation(53.1348, -6.0668);
+    assert.equal(court.areaName, 'Charlesland');
+    assert.equal(court.streetName, 'Charlesland Spine (Court & Park Walkway)');
+
+    // 3. Community Centre & Wood (Mid Spine)
+    const mid = inferGreystonesLocation(53.1325, -6.0675);
+    assert.equal(mid.areaName, 'Charlesland');
+    assert.equal(mid.streetName, 'Charlesland Spine (Community Centre & Wood)');
+
+    // 4. Grove & The Green
+    const grove = inferGreystonesLocation(53.1302, -6.0690);
+    assert.equal(grove.areaName, 'Charlesland');
+    assert.equal(grove.streetName, 'Charlesland Spine (Grove & The Green)');
+
+    // 5. Crescent & Southern Link
+    const south = inferGreystonesLocation(53.1278, -6.0712);
+    assert.equal(south.areaName, 'Charlesland');
+    assert.equal(south.streetName, 'Charlesland Spine (Crescent & Southern Link)');
+
+    // Verify all 5 locations along the spine have distinct street names rather than a single fixed label
+    const spineNames = new Set([north.streetName, court.streetName, mid.streetName, grove.streetName, south.streetName]);
+    assert.equal(spineNames.size, 5, 'Every segment along the Charlesland Spine must resolve to its specific location');
+
+    // Verify nearest bin distances dynamically update as the pin moves along the Spine
+    const binDistNorth = findNearestBins(53.1365, -6.0662, INITIAL_PUBLIC_BINS).dBinAllM;
+    const binDistMid = findNearestBins(53.1325, -6.0675, INITIAL_PUBLIC_BINS).dBinAllM;
+    const binDistSouth = findNearestBins(53.1278, -6.0712, INITIAL_PUBLIC_BINS).dBinAllM;
+
+    assert.ok(binDistNorth < binDistMid, 'North spine should be closer to town bins than mid spine');
+    assert.ok(binDistMid < binDistSouth, 'Mid spine should be closer to town bins than south spine');
+    assert.ok(binDistSouth > 1500, 'South spine is over 1.5km from public litter bins');
+  });
 });
 
