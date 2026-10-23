@@ -1032,9 +1032,14 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
               }}
               className="flex items-center gap-2 text-left min-w-0"
             >
-              <div className="w-8 h-8 rounded-xl bg-primary text-white flex items-center justify-center shadow-xs shrink-0">
-                <span className="text-base">💩</span>
-              </div>
+              <img
+                src="/logo.svg"
+                alt=""
+                aria-hidden="true"
+                width={32}
+                height={32}
+                className="w-8 h-8 shrink-0"
+              />
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-display text-base sm:text-lg font-bold text-ink tracking-tight whitespace-nowrap">

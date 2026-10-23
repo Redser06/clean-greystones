@@ -1,0 +1,67 @@
+{
+  "name": "Clean Greystones",
+  "short_name": "Clean Greystones",
+  "description": "Zero-login civic dog fouling map, public bin proximity audit, and 30-second Greystones councillor email builder.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f3f6f4",
+  "theme_color": "#006948",
+  "categories": [
+    "utilities",
+    "social",
+    "civic"
+  ],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Report Dog Fouling",
+      "short_name": "Log Poop",
+      "description": "1-tap map logging for uncollected dog fouling in Greystones",
+      "url": "/#map",
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Email Councillors",
+      "short_name": "Email Council",
+      "description": "Send practical solutions email to the 6 Greystones councillors",
+      "url": "/#council",
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}
