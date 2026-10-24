@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clean-greystones-v2';
+const CACHE_NAME = 'clean-greystones-v3';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -9,8 +9,7 @@ const PRECACHE_ASSETS = [
   '/icon-512.png',
   '/apple-touch-icon.png',
   '/logo.svg',
-  '/logo-horizontal.svg',
-  '/osm_bins_2026-10-16.geojson'
+  '/logo-horizontal.svg'
 ];
 
 self.addEventListener('install', (event) => {
@@ -42,8 +41,8 @@ self.addEventListener('fetch', (event) => {
   // For HTML navigation requests, use Network First, fallback to cached index.html
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request).catch(() => {
-        return caches.match('/index.html') || caches.match('/');
+      fetch(request).catch(async () => {
+        return (await caches.match('/index.html')) || (await caches.match('/'));
       })
     );
     return;

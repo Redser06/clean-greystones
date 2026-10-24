@@ -28,7 +28,29 @@ jobs:
         run: npm test
 
       - name: Build production bundle
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_PROJECT_ID: rapid-prototyping-4134c
+          VITE_FIREBASE_STORAGE_BUCKET: rapid-prototyping-4134c.firebasestorage.app
+          VITE_FIREBASE_AUTH_DOMAIN: rapid-prototyping-4134c.firebaseapp.com
+          VITE_FIREBASE_MESSAGING_SENDER_ID: '285060831800'
         run: npm run build
+
+      - name: Verify Firebase config baked into bundle
+        run: |
+          if ! grep -q "AIza" dist/assets/*.js; then
+            echo "ERROR: Production bundle is missing VITE_FIREBASE_API_KEY (offline-only build prevented)."
+            exit 1
+          fi
+
+      - name: Deploy Firestore Security Rules
+        env:
+          FIREBASE_SA_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RAPID_PROTOTYPING_4134C }}
+        run: |
+          echo "$FIREBASE_SA_KEY" > /tmp/firebase-sa.json
+          GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json npx --yes firebase-tools deploy --only firestore:rules --project rapid-prototyping-4134c
+          rm -f /tmp/firebase-sa.json
 
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0

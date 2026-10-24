@@ -28,6 +28,8 @@ import {
   VERIFIED_CITATIONS,
 } from '../data/greystonesData';
 import { PublicBin } from '../types';
+import { isValidCrowdsourcedReport } from '../utils/firebaseSync';
+import { computeDailySnapshots, formatDublinDate } from '../utils/reconciliation';
 
 describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
   it('computes accurate Haversine distance in metres for South Beach Promenade pins near Bin #G-14', () => {
@@ -272,6 +274,53 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     assert.ok(binDistNorth < binDistMid, 'North spine should be closer to town bins than mid spine');
     assert.ok(binDistMid < binDistSouth, 'Mid spine should be closer to town bins than south spine');
     assert.ok(binDistSouth > 1500, 'South spine is over 1.5km from public litter bins');
+  });
+
+  it('validates crowdsourced report schema and rejects poisoned or out-of-bounds payloads (B2)', () => {
+    const valid = INITIAL_REPORTS[0];
+    assert.equal(isValidCrowdsourcedReport(valid), true);
+
+    // Reject missing or non-string createdAt (prevents rep.createdAt.slice TypeError DoS)
+    assert.equal(isValidCrowdsourcedReport({ ...valid, createdAt: 12345 }), false);
+    assert.equal(isValidCrowdsourcedReport({ ...valid, createdAt: null }), false);
+
+    // Reject unknown severity enum (prevents SEVERITY_META[severity].isHighImpact TypeError DoS)
+    assert.equal(isValidCrowdsourcedReport({ ...valid, severity: 'nuclear_waste' }), false);
+
+    // Reject coordinates outside Greystones / North Wicklow bounding box
+    assert.equal(isValidCrowdsourcedReport({ ...valid, lat: 0, lng: 0 }), false);
+    assert.equal(isValidCrowdsourcedReport({ ...valid, lat: 53.99, lng: -6.06 }), false);
+
+    // Reject invalid confirmations count
+    assert.equal(isValidCrowdsourcedReport({ ...valid, confirmations: 0 }), false);
+    assert.equal(isValidCrowdsourcedReport({ ...valid, confirmations: NaN }), false);
+  });
+
+  it('neutralizes spreadsheet formula injection in CSV export (H2)', () => {
+    const maliciousReport = {
+      ...INITIAL_REPORTS[0],
+      note: '=cmd|\'/C calc\'!A0',
+      streetName: '+SUM(1,1), Church Road',
+    };
+    const csv = exportReportsToCsv([maliciousReport]);
+    assert.ok(csv.includes("'=cmd|'/C calc'!A0"), 'Formula starting with = must be prefixed with a single quote');
+    assert.ok(csv.includes('"\'+SUM(1,1), Church Road"'), 'Formula starting with + and containing comma must be prefixed and quoted');
+  });
+
+  it('buckets dates in Europe/Dublin local time including IST summer offset (L3)', () => {
+    // 23:30 UTC on July 15 is 00:30 IST on July 16 in Greystones (Europe/Dublin)
+    const dublinDate = formatDublinDate('2026-07-15T23:30:00.000Z');
+    assert.equal(dublinDate, '2026-07-16');
+
+    const snapshots = computeDailySnapshots([
+      {
+        ...INITIAL_REPORTS[0],
+        id: 'rep-ist-test',
+        createdAt: '2026-07-15T23:30:00.000Z',
+        status: 'spotted',
+      },
+    ]);
+    assert.ok(snapshots['2026-07-16'], 'Late-evening IST report must bucket into the local Dublin date');
   });
 });
 
