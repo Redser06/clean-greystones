@@ -207,14 +207,24 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
     assert.ok(fs.existsSync(rulesPath), 'firestore.rules must exist');
     const rulesContent = fs.readFileSync(rulesPath, 'utf-8');
 
-    // Rule assertion 1: clean_greystones_reports update must be restricted to isAdmin or affectedKeys hasOnly confirmations
+    // Rule assertion 1: clean_greystones_reports create must validate schema and update must increment confirmations by exactly +1
     assert.ok(
-      rulesContent.includes("request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations'])"),
-      'Reports update rule must restrict non-admin updates strictly to confirmations'
+      rulesContent.includes('allow create: if isAdmin() || isValidReportCreate(request.resource.data);'),
+      'Reports create rule must enforce isValidReportCreate schema validation'
     );
     assert.ok(
-      rulesContent.includes('request.resource.data.confirmations > resource.data.confirmations'),
-      'Confirmations update must strictly increment'
+      rulesContent.includes('request.resource.data.confirmations == resource.data.confirmations + 1'),
+      'Confirmations update must strictly increment by +1 (preventing arbitrary jump to 999999)'
+    );
+
+    // Rule assertion 1b: clean_greystones_events read must be restricted to isAdmin()
+    const eventsBlock = rulesContent.slice(
+      rulesContent.indexOf('match /clean_greystones_events/{eventId}'),
+      rulesContent.indexOf('match /greystones_roads_reports/{reportId}')
+    );
+    assert.ok(
+      eventsBlock.includes('allow read: if isAdmin();'),
+      'Events collection read must be restricted to admins'
     );
 
     // Rule assertion 2: delete must be restricted to isAdmin
@@ -260,14 +270,17 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
         affected.length === 1 &&
         affected[0] === 'confirmations' &&
         typeof updated.confirmations === 'number' &&
-        updated.confirmations > original.confirmations
+        updated.confirmations === original.confirmations + 1
       );
     }
 
     const baseline = { confirmations: 1, status: 'spotted', streetName: 'Church Road' };
 
-    // Public incrementing confirmation: allowed
+    // Public incrementing confirmation by +1: allowed
     assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 2 }), true);
+
+    // Public attempting to jump confirmation to 999999: rejected (H1)
+    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 999999 }), false);
 
     // Public attempting to decrement confirmation: rejected
     assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 0 }), false);

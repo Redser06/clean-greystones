@@ -1191,8 +1191,12 @@ export function exportReportsToCsv(reports: FoulingReport[]): string {
   ];
 
   const escapeCsv = (val: string | number | boolean | undefined) => {
-    const str = String(val ?? '');
-    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    let str = String(val ?? '');
+    // Prevent CSV / spreadsheet formula injection when opened in Excel or Google Sheets
+    if (typeof val === 'string' && /^[=+\-@\t\r]/.test(str)) {
+      str = `'${str}`;
+    }
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
       return `"${str.replace(/"/g, '""')}"`;
     }
     return str;

@@ -32,8 +32,10 @@ import { GreystonesMapView } from './components/GreystonesMapView';
 import { AdminBackendView } from './components/AdminBackendView';
 import { isAdminSessionActive } from './utils/adminAnalytics';
 import {
+  isValidCrowdsourcedReport,
   subscribeToCrowdsourcedReports,
   syncReportToCloud,
+  updateReportOptionalDetailsInCloud,
   deleteReportFromCloud,
   incrementConfirmationInCloud,
   clearReportsFromCloud,
@@ -48,6 +50,7 @@ import {
   subscribeToCrowdsourcedBins,
   syncBinToCloud,
   deleteBinFromCloud,
+  subscribeToAdminAuth,
 } from './utils/firebaseSync';
 import {
   reconcileReportLog,
@@ -55,6 +58,7 @@ import {
   filterReportsByTimeRange,
   computeDailySnapshots,
   computeWeeklyEvidenceSummary,
+  formatDublinDate,
 } from './utils/reconciliation';
 
 type BottomNavTab = 'map' | 'insights' | 'council';
@@ -112,6 +116,13 @@ export function App() {
     }
   }, [hamburgerOpen, isAdminRoute]);
 
+  useEffect(() => {
+    const unsub = subscribeToAdminAuth((_user, isAdmin) => {
+      setIsAdminAuthenticated(isAdmin || isAdminSessionActive());
+    });
+    return () => unsub();
+  }, []);
+
   // Real-time Crowdsourced Reports from Communal Cloud Backend (with local storage cache)
   const [reports, setReports] = useState<FoulingReport[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -119,7 +130,9 @@ export function App() {
       const stored = localStorage.getItem('clean-greystones.reports.v1');
       if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter(isValidCrowdsourcedReport);
+        }
       }
     } catch (err) {
       console.warn('Failed to parse stored reports', err);
@@ -330,22 +343,11 @@ export function App() {
   // Unique provable anonymous device token (no logins, no PII)
   const [submitterToken] = useState<string>(() => getOrCreateSubmitterToken());
 
-  // Real-time Civic Product Analytics & Council Email Telemetry
-  const [civicEvents, setCivicEvents] = useState<CivicActionEvent[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const stored = localStorage.getItem('clean-greystones.events.v1');
-      if (stored !== null) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (err) {
-      console.warn('Failed to parse stored civic events', err);
-    }
-    return [];
-  });
+  // Real-time Civic Product Analytics & Council Email Telemetry (Admin-only read)
+  const [civicEvents, setCivicEvents] = useState<CivicActionEvent[]>([]);
 
   useEffect(() => {
+    if (!isAdminRoute || !isAdminAuthenticated) return;
     const unsubscribe = subscribeToCivicEvents(
       (events) => {
         setCivicEvents(events);
@@ -355,17 +357,7 @@ export function App() {
       }
     );
     return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem('clean-greystones.events.v1', JSON.stringify(civicEvents));
-      } catch (err) {
-        console.warn('Failed to save events to localStorage', err);
-      }
-    }
-  }, [civicEvents]);
+  }, [isAdminRoute, isAdminAuthenticated]);
 
   const recordCivicEvent = (
     type: CivicEventType,
@@ -383,12 +375,11 @@ export function App() {
       type,
       submitterToken,
       timestamp: new Date().toISOString(),
-      metadata: {
-        ...meta,
-        userAgent: typeof window !== 'undefined' ? window.navigator.userAgent : undefined,
-      },
+      metadata: meta ? { ...meta } : undefined,
     };
-    setCivicEvents((prev) => [event, ...prev]);
+    if (isAdminRoute && isAdminAuthenticated) {
+      setCivicEvents((prev) => [event, ...prev]);
+    }
     logCivicEventToCloud(event).catch((err) => {
       console.warn('Failed to sync civic event to cloud:', err);
     });
@@ -538,16 +529,17 @@ export function App() {
     [reconciledReports]
   );
 
-  // Automatically save/update today's snapshot in Cloud Firestore
+  // Automatically save/update today's snapshot in Cloud Firestore when signed in as admin
   useEffect(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    if (!isAdminAuthenticated) return;
+    const todayStr = formatDublinDate(new Date());
     const todaySnap = dailySnapshots[todayStr];
     if (todaySnap && todaySnap.totalReports > 0) {
       saveDailySnapshotToCloud(todaySnap).catch((err) => {
         console.warn('Could not save daily snapshot to cloud:', err);
       });
     }
-  }, [dailySnapshots]);
+  }, [dailySnapshots, isAdminAuthenticated]);
 
   // One-shot fetch of latest communal evidence from Cloud Firestore for Councillor Email
   const handleRefreshBackendEvidence = async () => {
@@ -634,7 +626,7 @@ export function App() {
         nearestBinCode: merged.nearestBinCode,
       });
 
-      mergeReportInCloud(merged, reconcileRes.mergedReportId).catch((err) => {
+      mergeReportInCloud(merged).catch((err) => {
         console.warn('Could not merge report in cloud:', err);
       });
     } else {
@@ -739,7 +731,11 @@ export function App() {
     setLastLoggedReport(updated);
     setExpandOptionalReportModal(false);
 
-    syncReportToCloud(updated).catch((err) => {
+    updateReportOptionalDetailsInCloud(updated.id, {
+      note: updated.note,
+      hasPhoto: updated.hasPhoto,
+      photoDataUrl: updated.photoDataUrl,
+    }).catch((err) => {
       console.warn('Could not sync report details to cloud:', err);
     });
   };
@@ -749,9 +745,43 @@ export function App() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setOptionalPhotoPreview(reader.result);
-      }
+      if (typeof reader.result !== 'string') return;
+      const rawDataUrl = reader.result;
+      // Re-encode via HTML5 Canvas to strip EXIF GPS/device metadata and cap resolution to <=1024px
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxDim = 1024;
+          let width = img.width || 800;
+          let height = img.height || 600;
+          if (width > maxDim || height > maxDim) {
+            if (width >= height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const strippedDataUrl = canvas.toDataURL('image/jpeg', 0.78);
+            setOptionalPhotoPreview(strippedDataUrl);
+          } else {
+            setOptionalPhotoPreview(rawDataUrl);
+          }
+        } catch {
+          setOptionalPhotoPreview(rawDataUrl);
+        }
+      };
+      img.onerror = () => {
+        setOptionalPhotoPreview(rawDataUrl);
+      };
+      img.src = rawDataUrl;
     };
     reader.readAsDataURL(file);
   };
@@ -1949,16 +1979,21 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                             >
                               👍 +1 ({selectedReport.confirmations})
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteReportId(selectedReport.id)}
-                              className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-error border border-red-200 text-xs font-semibold flex items-center gap-1 transition-colors"
-                              title="Delete accidental report"
-                              aria-label="Delete report"
-                            >
-                              <span className="material-symbols-outlined text-[15px]">delete</span>
-                              <span>Delete</span>
-                            </button>
+                            {(isAdminAuthenticated ||
+                              (selectedReport.submitterToken === submitterToken &&
+                                Date.now() - new Date(selectedReport.createdAt).getTime() <
+                                  60 * 60 * 1000)) && (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteReportId(selectedReport.id)}
+                                className="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-error border border-red-200 text-xs font-semibold flex items-center gap-1 transition-colors"
+                                title="Delete accidental report"
+                                aria-label="Delete report"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">delete</span>
+                                <span>Delete</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => {

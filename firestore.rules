@@ -5,15 +5,31 @@ service cloud.firestore {
       return request.auth != null && (
         request.auth.token.admin == true ||
         request.auth.token.role == 'admin' ||
-        request.auth.token.email == 'admin@cleangreystones.ie' ||
+        (request.auth.token.email == 'admin@cleangreystones.ie' && request.auth.token.email_verified == true) ||
         exists(/databases/$(database)/documents/admin_roles/$(request.auth.uid))
       );
     }
 
-    // Existing rules preserved: Forecasts - read-only for public, writes strictly authenticated
+    function isValidReportCreate(data) {
+      return data.id is string && data.id.size() >= 3 && data.id.size() <= 80
+        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 40
+        && data.lat is number && data.lat >= 53.05 && data.lat <= 53.22
+        && data.lng is number && data.lng >= -6.20 && data.lng <= -6.00
+        && data.streetName is string && data.streetName.size() >= 1 && data.streetName.size() <= 160
+        && data.areaName is string && data.areaName.size() >= 1 && data.areaName.size() <= 160
+        && data.severity in ['just_poop', 'stepped_in', 'buggy_wheels', 'wheelchair_wheels']
+        && data.status in ['spotted', 'pending', 'stale']
+        && data.confirmations is number && data.confirmations == 1
+        && data.submitterToken is string && data.submitterToken.size() >= 6 && data.submitterToken.size() <= 64
+        && data.dBinAllM is number && data.dBinAllM >= 0
+        && (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 500))
+        && (!('photoDataUrl' in data) || data.photoDataUrl == null || (data.photoDataUrl is string && data.photoDataUrl.size() <= 350000));
+    }
+
+    // Existing rules preserved: Forecasts - read-only for public, writes restricted to admins
     match /forecasts/{forecastId} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if isAdmin();
     }
     
     // Existing rules preserved: Shared roadmap scenarios (TF4)
@@ -60,15 +76,34 @@ service cloud.firestore {
     }
 
     // Clean Greystones: Crowdsourced Civic Dog Fouling Reports
-    // Public crowdsourced reports can be read and created.
-    // Non-admin updates are strictly limited to incrementing the confirmation count.
-    // Modifications of other fields, soft-deletes (status='deleted'), and hard deletes are restricted to admins.
+    // Public crowdsourced reports can be read and created with strict schema & coordinate bounds validation.
+    // Non-admin updates are restricted to:
+    //   1. Corroboration / 15m spatial merge (+1 confirmation increment)
+    //   2. Submitter post-log details (note/photo) or accidental-tap undo within 60 minutes of creation.
     match /clean_greystones_reports/{reportId} {
-      allow read, create: if true;
+      allow read: if true;
+      allow create: if isAdmin() || isValidReportCreate(request.resource.data);
       allow update: if isAdmin() || (
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations']) &&
+        // Path 1: Community corroboration (+1 confirmation or 15m spatial merge)
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations', 'lastConfirmedAt', 'severity', 'additionalSubmitters', 'note']) &&
         request.resource.data.confirmations is number &&
-        request.resource.data.confirmations > resource.data.confirmations
+        request.resource.data.confirmations == resource.data.confirmations + 1 &&
+        request.resource.data.severity in ['just_poop', 'stepped_in', 'buggy_wheels', 'wheelchair_wheels'] &&
+        (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 500))
+      ) || (
+        // Path 2: Submitter adding optional note/photo or undoing accidental tap within 60 minutes
+        request.resource.data.submitterToken == resource.data.submitterToken &&
+        request.time < resource.createTime + duration.value(60, 'm') && (
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['note', 'hasPhoto', 'photoDataUrl']) &&
+            (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 500)) &&
+            (!('photoDataUrl' in request.resource.data) || request.resource.data.photoDataUrl == null || (request.resource.data.photoDataUrl is string && request.resource.data.photoDataUrl.size() <= 350000))
+          ) || (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'deletedAt']) &&
+            request.resource.data.status == 'deleted' &&
+            request.resource.data.deletedAt is string
+          )
+        )
       );
       allow delete: if isAdmin();
     }
@@ -81,18 +116,36 @@ service cloud.firestore {
     }
 
     // Clean Greystones: Civic Action & Analytics Events (Council emails, button clicks)
+    // Read access restricted to verified administrators only (no public telemetry exposure).
     match /clean_greystones_events/{eventId} {
-      allow read, create: if true;
+      allow read: if isAdmin();
+      allow create: if isAdmin() || (
+        request.resource.data.id is string &&
+        request.resource.data.type in [
+          'email_council_mailto',
+          'email_council_copy',
+          'email_council_gmail',
+          'report_logged',
+          'report_corroborated',
+          'report_deleted'
+        ] &&
+        request.resource.data.submitterToken is string &&
+        request.resource.data.submitterToken.size() <= 64 &&
+        request.resource.data.timestamp is string &&
+        request.resource.data.timestamp.size() >= 10 &&
+        request.resource.data.timestamp.size() <= 40
+      );
       allow update, delete: if isAdmin();
     }
 
     // Fix Greystones Roads: Crowdsourced Sister App Hazard Reports
     match /greystones_roads_reports/{reportId} {
-      allow read, create: if true;
+      allow read: if true;
+      allow create: if isAdmin() || isValidReportCreate(request.resource.data);
       allow update: if isAdmin() || (
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations']) &&
         request.resource.data.confirmations is number &&
-        request.resource.data.confirmations > resource.data.confirmations
+        request.resource.data.confirmations == resource.data.confirmations + 1
       );
       allow delete: if isAdmin();
     }

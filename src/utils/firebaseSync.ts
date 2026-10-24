@@ -10,6 +10,7 @@ import {
   onSnapshot,
   query,
   orderBy,
+  limit,
   writeBatch,
   getDocs,
   Unsubscribe,
@@ -156,6 +157,40 @@ export function subscribeToAdminAuth(
 
 const REPORTS_COLLECTION = 'clean_greystones_reports';
 
+const VALID_SEVERITIES = new Set([
+  'just_poop',
+  'stepped_in',
+  'buggy_wheels',
+  'wheelchair_wheels',
+]);
+
+/**
+ * Runtime schema & bounds validator for crowdsourced reports from Firestore or localStorage.
+ * Prevents malformed or poisoned documents from crashing React render paths.
+ */
+export function isValidCrowdsourcedReport(raw: unknown): raw is FoulingReport {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.createdAt !== 'string' || r.createdAt.length < 10) return false;
+  if (typeof r.lat !== 'number' || !Number.isFinite(r.lat) || r.lat < 53.05 || r.lat > 53.22) {
+    return false;
+  }
+  if (typeof r.lng !== 'number' || !Number.isFinite(r.lng) || r.lng < -6.20 || r.lng > -6.00) {
+    return false;
+  }
+  if (typeof r.streetName !== 'string' || !r.streetName.trim()) return false;
+  if (typeof r.areaName !== 'string' || !r.areaName.trim()) return false;
+  if (typeof r.severity !== 'string' || !VALID_SEVERITIES.has(r.severity)) return false;
+  if (typeof r.confirmations !== 'number' || !Number.isFinite(r.confirmations) || r.confirmations < 1) {
+    return false;
+  }
+  if (typeof r.submitterToken !== 'string' || !r.submitterToken.trim()) return false;
+  if (typeof r.dBinAllM !== 'number' || !Number.isFinite(r.dBinAllM) || r.dBinAllM < 0) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Real-time listener for crowdsourced communal reports across all residents and browsers.
  * Triggers callback immediately on initial load and whenever any device logs, updates, or deletes a report.
@@ -170,19 +205,16 @@ export function subscribeToCrowdsourcedReports(
   }
 
   const colRef = collection(db, REPORTS_COLLECTION);
-  const q = query(colRef, orderBy('createdAt', 'desc'));
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(500));
 
   return onSnapshot(
     q,
     (snapshot) => {
       const live: FoulingReport[] = [];
       snapshot.forEach((docSnap) => {
-        const data = docSnap.data() as FoulingReport;
-        if (data.status !== 'deleted') {
-          live.push({
-            ...data,
-            id: docSnap.id,
-          });
+        const raw = { ...docSnap.data(), id: docSnap.id };
+        if (isValidCrowdsourcedReport(raw) && raw.status !== 'deleted') {
+          live.push(raw);
         }
       });
       onUpdate(live);
@@ -195,7 +227,7 @@ export function subscribeToCrowdsourcedReports(
 }
 
 /**
- * Saves or updates a fouling report in the communal cloud backend.
+ * Saves a newly created fouling report in the communal cloud backend.
  */
 export async function syncReportToCloud(report: FoulingReport): Promise<void> {
   if (!db) return;
@@ -204,6 +236,29 @@ export async function syncReportToCloud(report: FoulingReport): Promise<void> {
     await setDoc(docRef, report, { merge: true });
   } catch (err) {
     console.error('Failed to sync report to communal cloud:', err);
+    throw err;
+  }
+}
+
+/**
+ * Updates only the optional post-log details (note / compressed photo) on a newly created report.
+ */
+export async function updateReportOptionalDetailsInCloud(
+  reportId: string,
+  details: { note?: string; hasPhoto?: boolean; photoDataUrl?: string }
+): Promise<void> {
+  if (!db) return;
+  try {
+    const docRef = doc(db, REPORTS_COLLECTION, reportId);
+    const payload: Record<string, unknown> = {};
+    if (details.note !== undefined) payload.note = details.note;
+    if (details.hasPhoto !== undefined) payload.hasPhoto = details.hasPhoto;
+    if (details.photoDataUrl !== undefined) payload.photoDataUrl = details.photoDataUrl;
+    if (Object.keys(payload).length > 0) {
+      await updateDoc(docRef, payload);
+    }
+  } catch (err) {
+    console.error('Failed to update optional report details in cloud:', err);
     throw err;
   }
 }
@@ -329,13 +384,13 @@ export async function fetchLiveReportsFromCloud(): Promise<FoulingReport[]> {
   if (!db) return [];
   try {
     const colRef = collection(db, REPORTS_COLLECTION);
-    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const q = query(colRef, orderBy('createdAt', 'desc'), limit(500));
     const snap = await getDocs(q);
     const live: FoulingReport[] = [];
     snap.forEach((d) => {
-      const data = d.data() as FoulingReport;
-      if (data.status !== 'deleted') {
-        live.push({ ...data, id: d.id });
+      const raw = { ...d.data(), id: d.id };
+      if (isValidCrowdsourcedReport(raw) && raw.status !== 'deleted') {
+        live.push(raw);
       }
     });
     return live;
@@ -346,24 +401,25 @@ export async function fetchLiveReportsFromCloud(): Promise<FoulingReport[]> {
 }
 
 /**
- * Atomically updates a primary report and marks a duplicate report as merged in Cloud Firestore.
+ * Updates an existing primary report when a nearby observation (<=15m) is merged into it.
+ * Only modifies the fields permitted by Firestore corroboration security rules.
  */
 export async function mergeReportInCloud(
-  primaryReport: FoulingReport,
-  duplicateReportId?: string
+  primaryReport: FoulingReport
 ): Promise<void> {
   if (!db) return;
   try {
-    const batch = writeBatch(db);
-    batch.set(doc(db, REPORTS_COLLECTION, primaryReport.id), primaryReport, { merge: true });
-    if (duplicateReportId && duplicateReportId !== primaryReport.id) {
-      batch.set(
-        doc(db, REPORTS_COLLECTION, duplicateReportId),
-        { status: 'merged', mergedIntoId: primaryReport.id },
-        { merge: true }
-      );
+    const docRef = doc(db, REPORTS_COLLECTION, primaryReport.id);
+    const payload: Record<string, unknown> = {
+      confirmations: primaryReport.confirmations,
+      severity: primaryReport.severity,
+      lastConfirmedAt: primaryReport.lastConfirmedAt ?? new Date().toISOString(),
+      additionalSubmitters: primaryReport.additionalSubmitters ?? [],
+    };
+    if (primaryReport.note !== undefined) {
+      payload.note = primaryReport.note;
     }
-    await batch.commit();
+    await updateDoc(docRef, payload);
   } catch (err) {
     console.error('Failed to merge report in cloud:', err);
     throw err;
