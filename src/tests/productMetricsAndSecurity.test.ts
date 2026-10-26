@@ -209,7 +209,7 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
 
     // Rule assertion 1: clean_greystones_reports create must validate schema and update must increment confirmations by exactly +1
     assert.ok(
-      rulesContent.includes('allow create: if isAdmin() || isValidReportCreate(request.resource.data);'),
+      rulesContent.includes('allow create: if isAdmin() || isValidReportCreate(reportId, request.resource.data);'),
       'Reports create rule must enforce isValidReportCreate schema validation'
     );
     assert.ok(

@@ -518,3 +518,108 @@ export function checkPiiAndGuardrails(text: string): {
     warnings,
   };
 }
+
+export const MAX_JPEG_DATA_URL_LENGTH = 350000;
+const JPEG_DATA_URL_PREFIX = 'data:image/jpeg;base64,';
+
+/**
+ * Re-encodes an uploaded image into an EXIF-stripped JPEG data URL (<=1024px, <=350KB).
+ * Strictly rejects HEIC/TIFF and any decode or canvas re-encode failure so raw unstripped
+ * files (which can leak GPS/EXIF metadata) are never kept.
+ */
+export async function reencodePhotoToSafeJpeg(
+  fileMeta: { name?: string; type?: string },
+  rawDataUrl: string,
+  customTranscoder?: (rawDataUrl: string, maxDim: number) => Promise<string>
+): Promise<string> {
+  const mime = (fileMeta.type || '').toLowerCase().trim();
+  const fileName = (fileMeta.name || '').toLowerCase().trim();
+  const normalizedDataUrl = (rawDataUrl || '').trim();
+
+  if (
+    mime === 'image/heic' ||
+    mime === 'image/heif' ||
+    mime === 'image/tiff' ||
+    /\.(heic|heif|tif|tiff)$/i.test(fileName) ||
+    /^data:image\/(heic|heif|tiff)/i.test(normalizedDataUrl)
+  ) {
+    throw new Error(
+      'HEIC and TIFF photos cannot be safely stripped of GPS metadata in your browser. Please upload a standard JPEG, PNG, or WebP photo.'
+    );
+  }
+
+  if (!normalizedDataUrl.startsWith('data:image/')) {
+    throw new Error('Invalid image file. Please select a valid photo.');
+  }
+
+  const maxDim = 1024;
+  let strippedDataUrl: string;
+
+  try {
+    if (customTranscoder) {
+      strippedDataUrl = await customTranscoder(normalizedDataUrl, maxDim);
+    } else {
+      strippedDataUrl = await new Promise<string>((resolve, reject) => {
+        if (typeof Image === 'undefined' || typeof document === 'undefined') {
+          reject(new Error('Image decoding is unavailable in this environment.'));
+          return;
+        }
+        const img = new Image();
+        img.onload = () => {
+          try {
+            let width = img.width || 800;
+            let height = img.height || 600;
+            if (width > maxDim || height > maxDim) {
+              if (width >= height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              reject(new Error('Canvas context unavailable for metadata stripping.'));
+              return;
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            const encoded = canvas.toDataURL('image/jpeg', 0.78);
+            resolve(encoded);
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error('Failed to re-encode image.'));
+          }
+        };
+        img.onerror = () => {
+          reject(new Error('Failed to decode image file.'));
+        };
+        img.src = normalizedDataUrl;
+      });
+    }
+  } catch {
+    throw new Error(
+      'Photo could not be processed to strip location metadata. Please try a standard JPEG or PNG image.'
+    );
+  }
+
+  if (
+    typeof strippedDataUrl !== 'string' ||
+    !strippedDataUrl.startsWith(JPEG_DATA_URL_PREFIX) ||
+    strippedDataUrl.length <= JPEG_DATA_URL_PREFIX.length
+  ) {
+    throw new Error(
+      'Photo could not be converted to a safe JPEG image. Please try another photo.'
+    );
+  }
+
+  if (strippedDataUrl.length > MAX_JPEG_DATA_URL_LENGTH) {
+    throw new Error(
+      'Compressed photo exceeds the 350KB cloud storage limit. Please use a smaller or lower-resolution photo.'
+    );
+  }
+
+  return strippedDataUrl;
+}

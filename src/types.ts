@@ -6,6 +6,7 @@ export type CivicAppStream = 'clean_greystones' | 'greystones_roads';
 
 export interface FoulingReport {
   id: string;
+  ownerUid?: string;
   appStream?: CivicAppStream;
   createdAt: string; // ISO
   lat: number;
@@ -168,6 +169,7 @@ export type CivicEventType =
 
 export interface CivicActionEvent {
   id: string;
+  ownerUid?: string;
   type: CivicEventType;
   submitterToken: string;
   timestamp: string; // ISO

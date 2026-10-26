@@ -8,6 +8,7 @@ import {
   haversineDistanceMeters,
   inferGreystonesLocation,
   isValidSubmitterToken,
+  reencodePhotoToSafeJpeg,
   selectVerifiedCitations,
   SEVERITY_META,
 } from '../utils/graphEngine';
@@ -294,6 +295,114 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
     // Reject invalid confirmations count
     assert.equal(isValidCrowdsourcedReport({ ...valid, confirmations: 0 }), false);
     assert.equal(isValidCrowdsourcedReport({ ...valid, confirmations: NaN }), false);
+
+    // Reject non-JPEG photoDataUrl
+    assert.equal(
+      isValidCrowdsourcedReport({ ...valid, photoDataUrl: 'data:image/tiff;base64,AAAA' }),
+      false
+    );
+    assert.equal(
+      isValidCrowdsourcedReport({ ...valid, photoDataUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==' }),
+      true
+    );
+  });
+
+  it('rejects photo files on decode failure, HEIC/TIFF formats, or non-JPEG re-encode (never falls back to raw EXIF file)', async () => {
+    const rawExifLeakDataUrl = 'data:image/jpeg;base64,RAW_EXIF_GPS_LEAK_PAYLOAD_DO_NOT_KEEP';
+
+    // 1. Decode failure (e.g., corrupted image or browser Image.onerror) must reject, never returning rawDataUrl
+    await assert.rejects(
+      async () => {
+        await reencodePhotoToSafeJpeg(
+          { name: 'photo.jpg', type: 'image/jpeg' },
+          rawExifLeakDataUrl,
+          async () => {
+            throw new Error('Image.onerror decode failure');
+          }
+        );
+      },
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /could not be processed to strip location metadata/i);
+        assert.equal(err.message.includes('RAW_EXIF_GPS_LEAK_PAYLOAD_DO_NOT_KEEP'), false);
+        return true;
+      }
+    );
+
+    // 2. Also test default browser Image path when Image.onerror fires
+    const originalImage = (globalThis as any).Image;
+    const originalDocument = (globalThis as any).document;
+    try {
+      (globalThis as any).document = {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => null,
+        }),
+      };
+      (globalThis as any).Image = class MockFailingImage {
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        set src(_val: string) {
+          if (this.onerror) this.onerror();
+        }
+      };
+
+      await assert.rejects(
+        async () => {
+          await reencodePhotoToSafeJpeg(
+            { name: 'corrupt.jpg', type: 'image/jpeg' },
+            rawExifLeakDataUrl
+          );
+        },
+        /could not be processed to strip location metadata/i
+      );
+    } finally {
+      (globalThis as any).Image = originalImage;
+      (globalThis as any).document = originalDocument;
+    }
+
+    // 3. HEIC and TIFF files are rejected immediately before keeping raw bytes
+    await assert.rejects(
+      async () => {
+        await reencodePhotoToSafeJpeg(
+          { name: 'IMG_1234.HEIC', type: 'image/heic' },
+          'data:image/heic;base64,AAAA'
+        );
+      },
+      /HEIC and TIFF photos cannot be safely stripped of GPS metadata/i
+    );
+
+    await assert.rejects(
+      async () => {
+        await reencodePhotoToSafeJpeg(
+          { name: 'scan.tiff', type: 'image/tiff' },
+          'data:image/tiff;base64,AAAA'
+        );
+      },
+      /HEIC and TIFF photos cannot be safely stripped of GPS metadata/i
+    );
+
+    // 4. Non-JPEG canvas output (e.g. PNG fallback) is rejected
+    await assert.rejects(
+      async () => {
+        await reencodePhotoToSafeJpeg(
+          { name: 'photo.png', type: 'image/png' },
+          'data:image/png;base64,AAAA',
+          async () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=='
+        );
+      },
+      /could not be converted to a safe JPEG/i
+    );
+
+    // 5. Valid stripped JPEG succeeds
+    const safeJpeg = await reencodePhotoToSafeJpeg(
+      { name: 'dog_fouling.jpg', type: 'image/jpeg' },
+      rawExifLeakDataUrl,
+      async () => 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/'
+    );
+    assert.equal(safeJpeg, 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/');
+    assert.ok(safeJpeg.startsWith('data:image/jpeg;base64,'));
   });
 
   it('neutralizes spreadsheet formula injection in CSV export (H2)', () => {

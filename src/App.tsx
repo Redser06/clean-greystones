@@ -26,6 +26,7 @@ import {
   findNearestBins,
   getOrCreateSubmitterToken,
   inferGreystonesLocation,
+  reencodePhotoToSafeJpeg,
   selectVerifiedCitations,
 } from './utils/graphEngine';
 import { GreystonesMapView } from './components/GreystonesMapView';
@@ -626,7 +627,7 @@ export function App() {
         nearestBinCode: merged.nearestBinCode,
       });
 
-      mergeReportInCloud(merged).catch((err) => {
+      mergeReportInCloud(merged, submitterToken).catch((err) => {
         console.warn('Could not merge report in cloud:', err);
       });
     } else {
@@ -743,45 +744,41 @@ export function App() {
   const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const rejectPhotoWithError = (message: string) => {
+      setOptionalPhotoPreview(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setNoteWarnings([message]);
+    };
+
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result !== 'string') return;
+      if (typeof reader.result !== 'string') {
+        rejectPhotoWithError(
+          'Photo could not be processed to strip location metadata. Please try a standard JPEG or PNG image.'
+        );
+        return;
+      }
       const rawDataUrl = reader.result;
-      // Re-encode via HTML5 Canvas to strip EXIF GPS/device metadata and cap resolution to <=1024px
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const maxDim = 1024;
-          let width = img.width || 800;
-          let height = img.height || 600;
-          if (width > maxDim || height > maxDim) {
-            if (width >= height) {
-              height = Math.round((height * maxDim) / width);
-              width = maxDim;
-            } else {
-              width = Math.round((width * maxDim) / height);
-              height = maxDim;
-            }
-          }
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            const strippedDataUrl = canvas.toDataURL('image/jpeg', 0.78);
-            setOptionalPhotoPreview(strippedDataUrl);
-          } else {
-            setOptionalPhotoPreview(rawDataUrl);
-          }
-        } catch {
-          setOptionalPhotoPreview(rawDataUrl);
-        }
-      };
-      img.onerror = () => {
-        setOptionalPhotoPreview(rawDataUrl);
-      };
-      img.src = rawDataUrl;
+      reencodePhotoToSafeJpeg({ name: file.name, type: file.type }, rawDataUrl)
+        .then((strippedDataUrl) => {
+          setNoteWarnings([]);
+          setOptionalPhotoPreview(strippedDataUrl);
+        })
+        .catch((err) => {
+          rejectPhotoWithError(
+            err instanceof Error
+              ? err.message
+              : 'Photo could not be processed to strip location metadata. Please try a standard JPEG or PNG image.'
+          );
+        });
+    };
+    reader.onerror = () => {
+      rejectPhotoWithError(
+        'Photo file could not be read. Please try a standard JPEG or PNG image.'
+      );
     };
     reader.readAsDataURL(file);
   };
@@ -821,7 +818,7 @@ export function App() {
       nearestBinCode: target?.nearestBinCode,
     });
 
-    incrementConfirmationInCloud(reportId, nextCount).catch((err) => {
+    incrementConfirmationInCloud(reportId, submitterToken).catch((err) => {
       console.warn('Could not sync confirmation count to cloud:', err);
     });
   };

@@ -83,21 +83,22 @@ export function reconcileReportLog(
   const updatedConfirmations = (match.confirmations || 1) + 1;
   const elevatedSev = elevateSeverity(match.severity, newReport.severity);
 
-  const existingTokens = new Set<string>([match.submitterToken, ...(match.additionalSubmitters || [])]);
-  existingTokens.add(newReport.submitterToken);
+  const existingAdditional = [...(match.additionalSubmitters || [])];
+  if (
+    newReport.submitterToken &&
+    newReport.submitterToken !== match.submitterToken &&
+    !existingAdditional.includes(newReport.submitterToken)
+  ) {
+    existingAdditional.push(newReport.submitterToken);
+  }
 
   const updatedPrimary: FoulingReport = {
     ...match,
     severity: elevatedSev,
     confirmations: updatedConfirmations,
     lastConfirmedAt: newReport.createdAt,
-    additionalSubmitters: Array.from(existingTokens),
-    note:
-      newReport.note && !match.note?.includes(newReport.note)
-        ? match.note
-          ? `${match.note} · Note: ${newReport.note}`
-          : newReport.note
-        : match.note,
+    additionalSubmitters: existingAdditional,
+    note: match.note,
   };
 
   return {

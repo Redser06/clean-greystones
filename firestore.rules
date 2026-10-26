@@ -3,27 +3,147 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function isAdmin() {
       return request.auth != null && (
-        request.auth.token.admin == true ||
-        request.auth.token.role == 'admin' ||
-        (request.auth.token.email == 'admin@cleangreystones.ie' && request.auth.token.email_verified == true) ||
+        request.auth.token.get('admin', false) == true ||
+        request.auth.token.get('role', '') == 'admin' ||
+        (request.auth.token.get('email', '') == 'admin@cleangreystones.ie' && request.auth.token.get('email_verified', false) == true) ||
         exists(/databases/$(database)/documents/admin_roles/$(request.auth.uid))
       );
     }
 
-    function isValidReportCreate(data) {
-      return data.id is string && data.id.size() >= 3 && data.id.size() <= 80
-        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 40
+    function severityRank(sev) {
+      return sev == 'just_poop' ? 1
+        : sev == 'buggy_wheels' ? 2
+        : sev == 'stepped_in' ? 3
+        : sev == 'wheelchair_wheels' ? 4
+        : 0;
+    }
+
+    function isValidJpegDataUrl(url) {
+      return url is string
+        && url.size() >= 24
+        && url.size() <= 350000
+        && url[0:23] == 'data:image/jpeg;base64,';
+    }
+
+    function isValidAdditionalSubmittersGrowth(oldData, newData) {
+      let oldList = ('additionalSubmitters' in oldData && oldData.additionalSubmitters is list)
+        ? oldData.additionalSubmitters
+        : [];
+      let newList = newData.additionalSubmitters;
+      return newList is list
+        && newList.size() == oldList.size() + 1
+        && newList.size() <= 100
+        && (oldList.size() == 0 || newList[0:oldList.size()] == oldList)
+        && newList[oldList.size()] is string
+        && newList[oldList.size()].size() >= 6
+        && newList[oldList.size()].size() <= 64
+        && !(newList[oldList.size()] in oldList)
+        && newList[oldList.size()] != oldData.submitterToken;
+    }
+
+    function isValidReportCreate(reportId, data) {
+      let requiredKeys = [
+        'id',
+        'ownerUid',
+        'createdAt',
+        'lat',
+        'lng',
+        'accuracyM',
+        'streetName',
+        'areaName',
+        'h3Cell',
+        'severity',
+        'status',
+        'confirmations',
+        'submitterToken',
+        'nearestBinId',
+        'nearestBinCode',
+        'dBinAllM',
+        'dBinVerifiedM'
+      ];
+      let allowedKeys = [
+        'id',
+        'ownerUid',
+        'createdAt',
+        'lat',
+        'lng',
+        'accuracyM',
+        'streetName',
+        'areaName',
+        'h3Cell',
+        'severity',
+        'status',
+        'confirmations',
+        'submitterToken',
+        'nearestBinId',
+        'nearestBinCode',
+        'dBinAllM',
+        'dBinVerifiedM',
+        'note',
+        'hasPhoto',
+        'photoDataUrl',
+        'appStream',
+        'additionalSubmitters'
+      ];
+      return request.auth != null
+        && data.keys().hasAll(requiredKeys)
+        && data.keys().hasOnly(allowedKeys)
+        && data.id is string && data.id == reportId && data.id.size() >= 3 && data.id.size() <= 80
+        && data.ownerUid is string && data.ownerUid == request.auth.uid && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && data.createdAt is timestamp && data.createdAt == request.time
         && data.lat is number && data.lat >= 53.05 && data.lat <= 53.22
         && data.lng is number && data.lng >= -6.20 && data.lng <= -6.00
-        && data.streetName is string && data.streetName.size() >= 1 && data.streetName.size() <= 160
-        && data.areaName is string && data.areaName.size() >= 1 && data.areaName.size() <= 160
-        && data.severity in ['just_poop', 'stepped_in', 'buggy_wheels', 'wheelchair_wheels']
-        && data.status in ['spotted', 'pending', 'stale']
-        && data.confirmations is number && data.confirmations == 1
+        && data.accuracyM is number && data.accuracyM >= 0 && data.accuracyM <= 5000
+        && data.streetName is string && data.streetName.size() >= 1 && data.streetName.size() <= 120
+        && data.areaName is string && data.areaName.size() >= 1 && data.areaName.size() <= 120
+        && data.h3Cell is string && data.h3Cell.size() >= 1 && data.h3Cell.size() <= 32
+        && severityRank(data.severity) > 0
+        && data.status == 'spotted'
+        && data.confirmations is int && data.confirmations == 1
         && data.submitterToken is string && data.submitterToken.size() >= 6 && data.submitterToken.size() <= 64
-        && data.dBinAllM is number && data.dBinAllM >= 0
-        && (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 500))
-        && (!('photoDataUrl' in data) || data.photoDataUrl == null || (data.photoDataUrl is string && data.photoDataUrl.size() <= 350000));
+        && data.nearestBinId is string && data.nearestBinId.size() >= 1 && data.nearestBinId.size() <= 64
+        && data.nearestBinCode is string && data.nearestBinCode.size() >= 1 && data.nearestBinCode.size() <= 64
+        && data.dBinAllM is number && data.dBinAllM >= 0 && data.dBinAllM <= 50000
+        && data.dBinVerifiedM is number && data.dBinVerifiedM >= 0 && data.dBinVerifiedM <= 50000
+        && (!('note' in data) || (data.note is string && data.note.size() >= 1 && data.note.size() <= 140))
+        && (!('hasPhoto' in data) || data.hasPhoto is bool)
+        && (!('photoDataUrl' in data) || isValidJpegDataUrl(data.photoDataUrl))
+        && (!('appStream' in data) || data.appStream == 'clean_greystones')
+        && (!('additionalSubmitters' in data) || (data.additionalSubmitters is list && data.additionalSubmitters.size() == 0));
+    }
+
+    function isValidEventMetadata(meta) {
+      return meta is map
+        && meta.keys().hasOnly(['targetButton', 'templateId', 'councillorIds', 'reportId', 'streetName', 'nearestBinCode'])
+        && (!('targetButton' in meta) || meta.targetButton in ['mailto', 'copy', 'gmail'])
+        && (!('templateId' in meta) || (meta.templateId is string && meta.templateId.size() >= 1 && meta.templateId.size() <= 64))
+        && (!('councillorIds' in meta) || (meta.councillorIds is list && meta.councillorIds.size() <= 20))
+        && (!('reportId' in meta) || (meta.reportId is string && meta.reportId.size() >= 1 && meta.reportId.size() <= 80))
+        && (!('streetName' in meta) || (meta.streetName is string && meta.streetName.size() >= 1 && meta.streetName.size() <= 160))
+        && (!('nearestBinCode' in meta) || (meta.nearestBinCode is string && meta.nearestBinCode.size() >= 1 && meta.nearestBinCode.size() <= 64));
+    }
+
+    function isValidEventCreate(eventId, data) {
+      let requiredKeys = ['id', 'ownerUid', 'createdAt', 'type', 'submitterToken'];
+      let allowedKeys = ['id', 'ownerUid', 'createdAt', 'type', 'submitterToken', 'timestamp', 'appStream', 'metadata'];
+      return request.auth != null
+        && data.keys().hasAll(requiredKeys)
+        && data.keys().hasOnly(allowedKeys)
+        && data.id is string && data.id == eventId && data.id.size() >= 3 && data.id.size() <= 80
+        && data.ownerUid is string && data.ownerUid == request.auth.uid && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && data.createdAt is timestamp && data.createdAt == request.time
+        && data.type in [
+          'email_council_mailto',
+          'email_council_copy',
+          'email_council_gmail',
+          'report_logged',
+          'report_corroborated',
+          'report_deleted'
+        ]
+        && data.submitterToken is string && data.submitterToken.size() >= 6 && data.submitterToken.size() <= 64
+        && (!('timestamp' in data) || (data.timestamp is string && data.timestamp.size() >= 10 && data.timestamp.size() <= 40))
+        && (!('appStream' in data) || data.appStream in ['clean_greystones', 'greystones_roads'])
+        && (!('metadata' in data) || isValidEventMetadata(data.metadata));
     }
 
     // Existing rules preserved: Forecasts - read-only for public, writes restricted to admins
@@ -76,32 +196,43 @@ service cloud.firestore {
     }
 
     // Clean Greystones: Crowdsourced Civic Dog Fouling Reports
-    // Public crowdsourced reports can be read and created with strict schema & coordinate bounds validation.
+    // Public crowdsourced reports can be read and created with strict schema, ownerUid, server timestamp & bounds validation.
     // Non-admin updates are restricted to:
-    //   1. Corroboration / 15m spatial merge (+1 confirmation increment)
-    //   2. Submitter post-log details (note/photo) or accidental-tap undo within 60 minutes of creation.
+    //   1. Corroboration / 15m spatial merge (+1 confirmation increment, immutable note, escalating-only severity, +1 new bounded submitter, server lastConfirmedAt)
+    //   2. Authenticated owner post-log details (note/JPEG photo) or accidental-tap undo within 60 minutes of creation.
     match /clean_greystones_reports/{reportId} {
       allow read: if true;
-      allow create: if isAdmin() || isValidReportCreate(request.resource.data);
+      allow create: if isAdmin() || isValidReportCreate(reportId, request.resource.data);
       allow update: if isAdmin() || (
         // Path 1: Community corroboration (+1 confirmation or 15m spatial merge)
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations', 'lastConfirmedAt', 'severity', 'additionalSubmitters', 'note']) &&
-        request.resource.data.confirmations is number &&
+        resource.data.status == 'spotted' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['additionalSubmitters', 'confirmations', 'lastConfirmedAt', 'severity']) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasAll(['additionalSubmitters', 'confirmations', 'lastConfirmedAt']) &&
+        request.resource.data.confirmations is int &&
         request.resource.data.confirmations == resource.data.confirmations + 1 &&
-        request.resource.data.severity in ['just_poop', 'stepped_in', 'buggy_wheels', 'wheelchair_wheels'] &&
-        (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 500))
+        request.resource.data.lastConfirmedAt is timestamp &&
+        request.resource.data.lastConfirmedAt == request.time &&
+        severityRank(request.resource.data.severity) >= severityRank(resource.data.severity) &&
+        severityRank(request.resource.data.severity) > 0 &&
+        isValidAdditionalSubmittersGrowth(resource.data, request.resource.data)
       ) || (
-        // Path 2: Submitter adding optional note/photo or undoing accidental tap within 60 minutes
-        request.resource.data.submitterToken == resource.data.submitterToken &&
-        request.time < resource.createTime + duration.value(60, 'm') && (
+        // Path 2: Authenticated owner adding optional note/photo or undoing accidental tap within 60 minutes
+        request.auth != null &&
+        'ownerUid' in resource.data &&
+        resource.data.ownerUid is string &&
+        request.auth.uid == resource.data.ownerUid &&
+        resource.data.createdAt is timestamp &&
+        request.time < resource.data.createdAt + duration.value(60, 'm') && (
           (
+            resource.data.status == 'spotted' &&
             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['note', 'hasPhoto', 'photoDataUrl']) &&
-            (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 500)) &&
-            (!('photoDataUrl' in request.resource.data) || request.resource.data.photoDataUrl == null || (request.resource.data.photoDataUrl is string && request.resource.data.photoDataUrl.size() <= 350000))
+            (!('note' in request.resource.data) || (request.resource.data.note is string && request.resource.data.note.size() >= 1 && request.resource.data.note.size() <= 140)) &&
+            (!('hasPhoto' in request.resource.data) || request.resource.data.hasPhoto is bool) &&
+            (!('photoDataUrl' in request.resource.data) || isValidJpegDataUrl(request.resource.data.photoDataUrl))
           ) || (
             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'deletedAt']) &&
             request.resource.data.status == 'deleted' &&
-            request.resource.data.deletedAt is string
+            (!('deletedAt' in request.resource.data) || (request.resource.data.deletedAt is timestamp && request.resource.data.deletedAt == request.time))
           )
         )
       );
@@ -119,32 +250,17 @@ service cloud.firestore {
     // Read access restricted to verified administrators only (no public telemetry exposure).
     match /clean_greystones_events/{eventId} {
       allow read: if isAdmin();
-      allow create: if isAdmin() || (
-        request.resource.data.id is string &&
-        request.resource.data.type in [
-          'email_council_mailto',
-          'email_council_copy',
-          'email_council_gmail',
-          'report_logged',
-          'report_corroborated',
-          'report_deleted'
-        ] &&
-        request.resource.data.submitterToken is string &&
-        request.resource.data.submitterToken.size() <= 64 &&
-        request.resource.data.timestamp is string &&
-        request.resource.data.timestamp.size() >= 10 &&
-        request.resource.data.timestamp.size() <= 40
-      );
+      allow create: if isAdmin() || isValidEventCreate(eventId, request.resource.data);
       allow update, delete: if isAdmin();
     }
 
     // Fix Greystones Roads: Crowdsourced Sister App Hazard Reports
     match /greystones_roads_reports/{reportId} {
       allow read: if true;
-      allow create: if isAdmin() || isValidReportCreate(request.resource.data);
+      allow create: if isAdmin() || isValidReportCreate(reportId, request.resource.data);
       allow update: if isAdmin() || (
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmations']) &&
-        request.resource.data.confirmations is number &&
+        request.resource.data.confirmations is int &&
         request.resource.data.confirmations == resource.data.confirmations + 1
       );
       allow delete: if isAdmin();
