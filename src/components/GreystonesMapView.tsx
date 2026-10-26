@@ -68,8 +68,12 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
 
     const tileLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
       maxZoom: 20,
-      attribution: 'Map data &copy; Google & OpenStreetMap · Greystones',
+      attribution: 'Map data &copy; OpenStreetMap & CARTO · Greystones',
     }).addTo(map);
+
+    tileLayer.on('tileerror', () => {
+      setBasemapStyle('clean_coastal');
+    });
 
     const layerGroup = L.layerGroup().addTo(map);
 
@@ -156,7 +160,7 @@ export const GreystonesMapView: React.FC<GreystonesMapViewProps> = ({
 
     // 2. Render Fouling Emoji Pins (Clean & Uncluttered)
     for (const report of filteredReports) {
-      const meta = SEVERITY_META[report.severity];
+      const meta = SEVERITY_META[report.severity] ?? SEVERITY_META.just_poop;
       const isSelected = selectedReport?.id === report.id;
       const isHighImpact = meta.isHighImpact;
 

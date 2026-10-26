@@ -83,21 +83,22 @@ export function reconcileReportLog(
   const updatedConfirmations = (match.confirmations || 1) + 1;
   const elevatedSev = elevateSeverity(match.severity, newReport.severity);
 
-  const existingTokens = new Set<string>([match.submitterToken, ...(match.additionalSubmitters || [])]);
-  existingTokens.add(newReport.submitterToken);
+  const existingAdditional = [...(match.additionalSubmitters || [])];
+  if (
+    newReport.submitterToken &&
+    newReport.submitterToken !== match.submitterToken &&
+    !existingAdditional.includes(newReport.submitterToken)
+  ) {
+    existingAdditional.push(newReport.submitterToken);
+  }
 
   const updatedPrimary: FoulingReport = {
     ...match,
     severity: elevatedSev,
     confirmations: updatedConfirmations,
     lastConfirmedAt: newReport.createdAt,
-    additionalSubmitters: Array.from(existingTokens),
-    note:
-      newReport.note && !match.note?.includes(newReport.note)
-        ? match.note
-          ? `${match.note} · Note: ${newReport.note}`
-          : newReport.note
-        : match.note,
+    additionalSubmitters: existingAdditional,
+    note: match.note,
   };
 
   return {
@@ -203,6 +204,25 @@ export function filterReportsByTimeRange(
   });
 }
 
+const dublinDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Dublin',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/**
+ * Formats an ISO string or Date into YYYY-MM-DD in Europe/Dublin local time (IST/GMT).
+ */
+export function formatDublinDate(input: string | Date | undefined | null): string {
+  if (!input) return dublinDateFormatter.format(new Date());
+  const d = typeof input === 'string' ? new Date(input) : input;
+  if (Number.isNaN(d.getTime())) {
+    return typeof input === 'string' && input.length >= 10 ? input.slice(0, 10) : dublinDateFormatter.format(new Date());
+  }
+  return dublinDateFormatter.format(d);
+}
+
 /**
  * Builds 24-hour daily snapshots for historical aggregation and auditing.
  */
@@ -213,7 +233,7 @@ export function computeDailySnapshots(
 
   for (const rep of reports) {
     if (rep.status === 'merged') continue;
-    const dateStr = rep.createdAt.slice(0, 10); // YYYY-MM-DD
+    const dateStr = formatDublinDate(rep.createdAt); // YYYY-MM-DD in Europe/Dublin
     if (!buckets[dateStr]) buckets[dateStr] = [];
     buckets[dateStr].push(rep);
   }
@@ -280,8 +300,8 @@ export function computeWeeklyEvidenceSummary(
 ): WeeklyEvidenceSummary {
   const now = new Date();
   const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const weekStartStr = weekStart.toISOString().slice(0, 10);
-  const weekEndStr = now.toISOString().slice(0, 10);
+  const weekStartStr = formatDublinDate(weekStart);
+  const weekEndStr = formatDublinDate(now);
 
   const weekReports = filterReportsByTimeRange(reports, 'week');
   const todayReports = filterReportsByTimeRange(reports, 'today');
@@ -295,8 +315,8 @@ export function computeWeeklyEvidenceSummary(
   const days: { date: string; dayLabel: string; count: number }[] = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-    const dateStr = d.toISOString().slice(0, 10);
-    const dayLabel = d.toLocaleDateString('en-IE', { weekday: 'short' });
+    const dateStr = formatDublinDate(d);
+    const dayLabel = d.toLocaleDateString('en-IE', { weekday: 'short', timeZone: 'Europe/Dublin' });
     days.push({ date: dateStr, dayLabel, count: 0 });
   }
 
@@ -321,7 +341,7 @@ export function computeWeeklyEvidenceSummary(
     hotspotMap[key].count += r.confirmations || 1;
 
     // Day bucket
-    const dateStr = r.createdAt.slice(0, 10);
+    const dateStr = formatDublinDate(r.createdAt);
     const dayObj = days.find((d) => d.date === dateStr);
     if (dayObj) {
       dayObj.count += r.confirmations || 1;

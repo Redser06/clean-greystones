@@ -10,13 +10,18 @@ import {
   onSnapshot,
   query,
   orderBy,
+  limit,
   writeBatch,
   getDocs,
+  serverTimestamp,
+  increment,
+  arrayUnion,
   Unsubscribe,
 } from 'firebase/firestore';
 import {
   getAuth,
   signInWithEmailAndPassword,
+  signInAnonymously,
   signOut,
   onAuthStateChanged,
   User,
@@ -156,6 +161,92 @@ export function subscribeToAdminAuth(
 
 const REPORTS_COLLECTION = 'clean_greystones_reports';
 
+let pendingAnonymousSignIn: Promise<User> | null = null;
+
+/**
+ * Ensures the client is authenticated (using Firebase Anonymous Auth when not signed in)
+ * before performing any Firestore write operation, returning the authenticated User.
+ */
+export async function ensureAnonymousAuth(): Promise<User> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is not configured');
+  }
+  if (auth.currentUser) {
+    return auth.currentUser;
+  }
+  if (!pendingAnonymousSignIn) {
+    pendingAnonymousSignIn = signInAnonymously(auth)
+      .then((cred) => cred.user)
+      .finally(() => {
+        pendingAnonymousSignIn = null;
+      });
+  }
+  return pendingAnonymousSignIn;
+}
+
+function normalizeTimestampField(val: unknown): unknown {
+  if (val && typeof val === 'object' && typeof (val as { toDate?: unknown }).toDate === 'function') {
+    try {
+      return (val as { toDate: () => Date }).toDate().toISOString();
+    } catch {
+      return new Date().toISOString();
+    }
+  }
+  return val;
+}
+
+function normalizeFirestoreReport(rawData: Record<string, unknown>, id: string): Record<string, unknown> {
+  return {
+    ...rawData,
+    id,
+    createdAt: normalizeTimestampField(rawData.createdAt) ?? new Date().toISOString(),
+    ...(rawData.lastConfirmedAt !== undefined
+      ? { lastConfirmedAt: normalizeTimestampField(rawData.lastConfirmedAt) }
+      : {}),
+  };
+}
+
+const VALID_SEVERITIES = new Set([
+  'just_poop',
+  'stepped_in',
+  'buggy_wheels',
+  'wheelchair_wheels',
+]);
+
+/**
+ * Runtime schema & bounds validator for crowdsourced reports from Firestore or localStorage.
+ * Prevents malformed or poisoned documents from crashing React render paths.
+ */
+export function isValidCrowdsourcedReport(raw: unknown): raw is FoulingReport {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.createdAt !== 'string' || r.createdAt.length < 10) return false;
+  if (typeof r.lat !== 'number' || !Number.isFinite(r.lat) || r.lat < 53.05 || r.lat > 53.22) {
+    return false;
+  }
+  if (typeof r.lng !== 'number' || !Number.isFinite(r.lng) || r.lng < -6.20 || r.lng > -6.00) {
+    return false;
+  }
+  if (typeof r.streetName !== 'string' || !r.streetName.trim()) return false;
+  if (typeof r.areaName !== 'string' || !r.areaName.trim()) return false;
+  if (typeof r.severity !== 'string' || !VALID_SEVERITIES.has(r.severity)) return false;
+  if (typeof r.confirmations !== 'number' || !Number.isFinite(r.confirmations) || r.confirmations < 1) {
+    return false;
+  }
+  if (typeof r.submitterToken !== 'string' || !r.submitterToken.trim()) return false;
+  if (typeof r.dBinAllM !== 'number' || !Number.isFinite(r.dBinAllM) || r.dBinAllM < 0) {
+    return false;
+  }
+  if (
+    r.photoDataUrl !== undefined &&
+    r.photoDataUrl !== null &&
+    (typeof r.photoDataUrl !== 'string' || !r.photoDataUrl.startsWith('data:image/jpeg;base64,'))
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Real-time listener for crowdsourced communal reports across all residents and browsers.
  * Triggers callback immediately on initial load and whenever any device logs, updates, or deletes a report.
@@ -170,19 +261,19 @@ export function subscribeToCrowdsourcedReports(
   }
 
   const colRef = collection(db, REPORTS_COLLECTION);
-  const q = query(colRef, orderBy('createdAt', 'desc'));
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(500));
 
   return onSnapshot(
     q,
     (snapshot) => {
       const live: FoulingReport[] = [];
       snapshot.forEach((docSnap) => {
-        const data = docSnap.data() as FoulingReport;
-        if (data.status !== 'deleted') {
-          live.push({
-            ...data,
-            id: docSnap.id,
-          });
+        const raw = normalizeFirestoreReport(
+          docSnap.data({ serverTimestamps: 'estimate' }) as Record<string, unknown>,
+          docSnap.id
+        );
+        if (isValidCrowdsourcedReport(raw) && raw.status !== 'deleted') {
+          live.push(raw);
         }
       });
       onUpdate(live);
@@ -195,13 +286,50 @@ export function subscribeToCrowdsourcedReports(
 }
 
 /**
- * Saves or updates a fouling report in the communal cloud backend.
+ * Saves a newly created fouling report in the communal cloud backend.
+ * Signs in anonymously before the first write, sets ownerUid == request.auth.uid,
+ * and sets createdAt == request.time via serverTimestamp().
  */
 export async function syncReportToCloud(report: FoulingReport): Promise<void> {
   if (!db) return;
   try {
+    const user = await ensureAnonymousAuth();
     const docRef = doc(db, REPORTS_COLLECTION, report.id);
-    await setDoc(docRef, report, { merge: true });
+    const payload: Record<string, unknown> = {
+      id: report.id,
+      ownerUid: user.uid,
+      createdAt: serverTimestamp(),
+      lat: report.lat,
+      lng: report.lng,
+      accuracyM: report.accuracyM,
+      streetName: report.streetName,
+      areaName: report.areaName,
+      h3Cell: report.h3Cell,
+      severity: report.severity,
+      status: 'spotted',
+      confirmations: 1,
+      submitterToken: report.submitterToken,
+      nearestBinId: report.nearestBinId,
+      nearestBinCode: report.nearestBinCode,
+      dBinAllM: report.dBinAllM,
+      dBinVerifiedM: report.dBinVerifiedM,
+    };
+    if (report.note && report.note.trim()) {
+      payload.note = report.note.trim().slice(0, 140);
+    }
+    if (report.hasPhoto !== undefined) {
+      payload.hasPhoto = Boolean(report.hasPhoto);
+    }
+    if (report.photoDataUrl) {
+      if (!report.photoDataUrl.startsWith('data:image/jpeg;base64,')) {
+        throw new Error('Photo must be a re-encoded JPEG data URL');
+      }
+      payload.photoDataUrl = report.photoDataUrl;
+    }
+    if (report.appStream === 'clean_greystones') {
+      payload.appStream = report.appStream;
+    }
+    await setDoc(docRef, payload);
   } catch (err) {
     console.error('Failed to sync report to communal cloud:', err);
     throw err;
@@ -209,22 +337,56 @@ export async function syncReportToCloud(report: FoulingReport): Promise<void> {
 }
 
 /**
+ * Updates only the optional post-log details (note / compressed JPEG photo) on a newly created report
+ * owned by the current authenticated user within the 60-minute edit window.
+ */
+export async function updateReportOptionalDetailsInCloud(
+  reportId: string,
+  details: { note?: string; hasPhoto?: boolean; photoDataUrl?: string }
+): Promise<void> {
+  if (!db) return;
+  try {
+    await ensureAnonymousAuth();
+    const docRef = doc(db, REPORTS_COLLECTION, reportId);
+    const payload: Record<string, unknown> = {};
+    if (details.note !== undefined && details.note.trim() !== '') {
+      payload.note = details.note.trim().slice(0, 140);
+    }
+    if (details.hasPhoto !== undefined) {
+      payload.hasPhoto = Boolean(details.hasPhoto);
+    }
+    if (details.photoDataUrl !== undefined && details.photoDataUrl !== null) {
+      if (!details.photoDataUrl.startsWith('data:image/jpeg;base64,')) {
+        throw new Error('Photo must be a re-encoded JPEG data URL');
+      }
+      payload.photoDataUrl = details.photoDataUrl;
+    }
+    if (Object.keys(payload).length > 0) {
+      await updateDoc(docRef, payload);
+    }
+  } catch (err) {
+    console.error('Failed to update optional report details in cloud:', err);
+    throw err;
+  }
+}
+
+/**
  * Deletes a fouling report from the communal cloud backend.
  * If signed in as an administrator, performs a hard delete in Firestore.
- * If unauthenticated or a resident removing an accidental submission, applies a soft-delete status.
+ * If a resident owner removing an accidental submission within the undo window, applies a soft-delete status.
  */
 export async function deleteReportFromCloud(reportId: string): Promise<void> {
   if (!db) return;
   try {
+    const user = await ensureAnonymousAuth();
     const docRef = doc(db, REPORTS_COLLECTION, reportId);
-    const currentUser = auth?.currentUser;
-    const isAdmin = await verifyUserAdminRole(currentUser);
+    const isAdmin = await verifyUserAdminRole(user);
     if (isAdmin) {
       await deleteDoc(docRef);
     } else {
       await updateDoc(docRef, {
         status: 'deleted',
-        deletedAt: new Date().toISOString(),
+        deletedAt: serverTimestamp(),
       });
     }
   } catch (err) {
@@ -234,16 +396,22 @@ export async function deleteReportFromCloud(reportId: string): Promise<void> {
 }
 
 /**
- * Increments the confirmation (+1) count for a report in the communal cloud backend.
+ * Increments the confirmation (+1) count for a report in the communal cloud backend
+ * using Firestore increment(1), serverTimestamp(), and arrayUnion(submitterToken).
  */
 export async function incrementConfirmationInCloud(
   reportId: string,
-  newCount: number
+  submitterToken: string
 ): Promise<void> {
   if (!db) return;
   try {
+    await ensureAnonymousAuth();
     const docRef = doc(db, REPORTS_COLLECTION, reportId);
-    await updateDoc(docRef, { confirmations: newCount });
+    await updateDoc(docRef, {
+      confirmations: increment(1),
+      lastConfirmedAt: serverTimestamp(),
+      additionalSubmitters: arrayUnion(submitterToken),
+    });
   } catch (err) {
     console.error('Failed to increment confirmation in cloud:', err);
     throw err;
@@ -329,13 +497,13 @@ export async function fetchLiveReportsFromCloud(): Promise<FoulingReport[]> {
   if (!db) return [];
   try {
     const colRef = collection(db, REPORTS_COLLECTION);
-    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const q = query(colRef, orderBy('createdAt', 'desc'), limit(500));
     const snap = await getDocs(q);
     const live: FoulingReport[] = [];
     snap.forEach((d) => {
-      const data = d.data() as FoulingReport;
-      if (data.status !== 'deleted') {
-        live.push({ ...data, id: d.id });
+      const raw = normalizeFirestoreReport(d.data() as Record<string, unknown>, d.id);
+      if (isValidCrowdsourcedReport(raw) && raw.status !== 'deleted') {
+        live.push(raw);
       }
     });
     return live;
@@ -346,24 +514,29 @@ export async function fetchLiveReportsFromCloud(): Promise<FoulingReport[]> {
 }
 
 /**
- * Atomically updates a primary report and marks a duplicate report as merged in Cloud Firestore.
+ * Updates an existing primary report when a nearby observation (<=15m) is merged into it.
+ * Only modifies the fields permitted by Firestore corroboration security rules (note is immutable).
  */
 export async function mergeReportInCloud(
   primaryReport: FoulingReport,
-  duplicateReportId?: string
+  corroboratingToken?: string
 ): Promise<void> {
   if (!db) return;
   try {
-    const batch = writeBatch(db);
-    batch.set(doc(db, REPORTS_COLLECTION, primaryReport.id), primaryReport, { merge: true });
-    if (duplicateReportId && duplicateReportId !== primaryReport.id) {
-      batch.set(
-        doc(db, REPORTS_COLLECTION, duplicateReportId),
-        { status: 'merged', mergedIntoId: primaryReport.id },
-        { merge: true }
-      );
-    }
-    await batch.commit();
+    await ensureAnonymousAuth();
+    const docRef = doc(db, REPORTS_COLLECTION, primaryReport.id);
+    const tokenToAdd =
+      corroboratingToken ||
+      primaryReport.additionalSubmitters?.[primaryReport.additionalSubmitters.length - 1];
+    const payload: Record<string, unknown> = {
+      confirmations: increment(1),
+      severity: primaryReport.severity,
+      lastConfirmedAt: serverTimestamp(),
+      additionalSubmitters: tokenToAdd
+        ? arrayUnion(tokenToAdd)
+        : primaryReport.additionalSubmitters ?? [],
+    };
+    await updateDoc(docRef, payload);
   } catch (err) {
     console.error('Failed to merge report in cloud:', err);
     throw err;
@@ -374,12 +547,28 @@ const EVENTS_COLLECTION = 'clean_greystones_events';
 
 /**
  * Logs an anonymous product analytics event (e.g. council email action, drop logged, corroboration).
+ * Signs in anonymously before the first write and sets ownerUid and serverTimestamp().
  */
 export async function logCivicEventToCloud(event: CivicActionEvent): Promise<void> {
   if (!db) return;
   try {
+    const user = await ensureAnonymousAuth();
     const docRef = doc(db, EVENTS_COLLECTION, event.id);
-    await setDoc(docRef, event, { merge: true });
+    const payload: Record<string, unknown> = {
+      id: event.id,
+      ownerUid: user.uid,
+      createdAt: serverTimestamp(),
+      type: event.type,
+      submitterToken: event.submitterToken,
+      timestamp: event.timestamp,
+    };
+    if (event.appStream) {
+      payload.appStream = event.appStream;
+    }
+    if (event.metadata && Object.keys(event.metadata).length > 0) {
+      payload.metadata = event.metadata;
+    }
+    await setDoc(docRef, payload);
   } catch (err) {
     console.error('Failed to log civic event to cloud:', err);
   }
