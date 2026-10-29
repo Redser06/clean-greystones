@@ -525,17 +525,21 @@ export async function mergeReportInCloud(
   try {
     await ensureAnonymousAuth();
     const docRef = doc(db, REPORTS_COLLECTION, primaryReport.id);
-    const tokenToAdd =
+    const candidateToken =
       corroboratingToken ||
       primaryReport.additionalSubmitters?.[primaryReport.additionalSubmitters.length - 1];
+    const tokenToAdd =
+      candidateToken && candidateToken !== primaryReport.submitterToken
+        ? candidateToken
+        : undefined;
     const payload: Record<string, unknown> = {
       confirmations: increment(1),
       severity: primaryReport.severity,
       lastConfirmedAt: serverTimestamp(),
-      additionalSubmitters: tokenToAdd
-        ? arrayUnion(tokenToAdd)
-        : primaryReport.additionalSubmitters ?? [],
     };
+    if (tokenToAdd) {
+      payload.additionalSubmitters = arrayUnion(tokenToAdd);
+    }
     await updateDoc(docRef, payload);
   } catch (err) {
     console.error('Failed to merge report in cloud:', err);

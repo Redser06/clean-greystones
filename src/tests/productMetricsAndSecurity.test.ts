@@ -255,44 +255,6 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
       rulesContent.includes('match /protofleet_deployments/{slug} {\n      allow read: if true;\n      allow write: if isAdmin();'),
       'protofleet_deployments write must be restricted to isAdmin'
     );
-
-    // Functional evaluator simulating Firestore engine logic
-    function simulateReportUpdate(
-      isAdmin: boolean,
-      original: { confirmations: number; status: string; streetName: string },
-      updated: { confirmations: number; status: string; streetName: string }
-    ): boolean {
-      if (isAdmin) return true;
-      const affected = Object.keys(updated).filter(
-        (k) => (original as any)[k] !== (updated as any)[k]
-      );
-      return (
-        affected.length === 1 &&
-        affected[0] === 'confirmations' &&
-        typeof updated.confirmations === 'number' &&
-        updated.confirmations === original.confirmations + 1
-      );
-    }
-
-    const baseline = { confirmations: 1, status: 'spotted', streetName: 'Church Road' };
-
-    // Public incrementing confirmation by +1: allowed
-    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 2 }), true);
-
-    // Public attempting to jump confirmation to 999999: rejected (H1)
-    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 999999 }), false);
-
-    // Public attempting to decrement confirmation: rejected
-    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, confirmations: 0 }), false);
-
-    // Public attempting to soft-delete by changing status: REJECTED (closes the security hole!)
-    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, status: 'deleted' }), false);
-
-    // Public attempting to tamper with street name: rejected
-    assert.equal(simulateReportUpdate(false, baseline, { ...baseline, streetName: 'Fake St' }), false);
-
-    // Admin soft-delete or status change: allowed
-    assert.equal(simulateReportUpdate(true, baseline, { ...baseline, status: 'deleted' }), true);
   });
 
   it('verifies administrator roles via custom claims and administrator email allowlists', async () => {

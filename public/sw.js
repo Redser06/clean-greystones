@@ -1,7 +1,5 @@
-const CACHE_NAME = 'clean-greystones-v3';
+const CACHE_NAME = 'clean-greystones-v4';
 const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/favicon.ico',
   '/favicon.svg',
@@ -38,12 +36,24 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  // For HTML navigation requests, use Network First, fallback to cached index.html
-  if (request.mode === 'navigate') {
+  // For HTML navigation requests and /index.html (or /), always use Network First (bypassing stale cache)
+  if (
+    request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname === '/index.html'
+  ) {
     event.respondWith(
-      fetch(request).catch(async () => {
-        return (await caches.match('/index.html')) || (await caches.match('/'));
-      })
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', clone));
+          }
+          return response;
+        })
+        .catch(async () => {
+          return (await caches.match('/index.html')) || (await caches.match('/'));
+        })
     );
     return;
   }

@@ -27,6 +27,11 @@ jobs:
       - name: Run Tests
         run: npm test
 
+      - name: Run Firestore rules tests
+        run: |
+          java -version
+          npm run test:rules
+
       - name: Build production bundle
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
@@ -44,14 +49,6 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy Firestore Security Rules
-        env:
-          FIREBASE_SA_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RAPID_PROTOTYPING_4134C }}
-        run: |
-          echo "$FIREBASE_SA_KEY" > /tmp/firebase-sa.json
-          GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json npx --yes firebase-tools deploy --only firestore:rules --project rapid-prototyping-4134c
-          rm -f /tmp/firebase-sa.json
-
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
@@ -60,3 +57,11 @@ jobs:
           channelId: live
           projectId: rapid-prototyping-4134c
           target: clean-greystones
+
+      - name: Deploy Firestore Security Rules
+        env:
+          FIREBASE_SA_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RAPID_PROTOTYPING_4134C }}
+        run: |
+          echo "$FIREBASE_SA_KEY" > /tmp/firebase-sa.json
+          GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json npx --yes firebase-tools deploy --only firestore:rules --project rapid-prototyping-4134c
+          rm -f /tmp/firebase-sa.json

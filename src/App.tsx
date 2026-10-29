@@ -33,6 +33,8 @@ import { GreystonesMapView } from './components/GreystonesMapView';
 import { AdminBackendView } from './components/AdminBackendView';
 import { isAdminSessionActive } from './utils/adminAnalytics';
 import {
+  auth,
+  ensureAnonymousAuth,
   isValidCrowdsourcedReport,
   subscribeToCrowdsourcedReports,
   syncReportToCloud,
@@ -118,6 +120,9 @@ export function App() {
   }, [hamburgerOpen, isAdminRoute]);
 
   useEffect(() => {
+    ensureAnonymousAuth().catch(() => {
+      // Anonymous auth will be retried before first write
+    });
     const unsub = subscribeToAdminAuth((_user, isAdmin) => {
       setIsAdminAuthenticated(isAdmin || isAdminSessionActive());
     });
@@ -586,6 +591,7 @@ export function App() {
     const uniqueId = `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
     const candidateReport: FoulingReport = {
       id: uniqueId,
+      ownerUid: auth?.currentUser?.uid,
       createdAt: new Date().toISOString(),
       lat,
       lng,
@@ -629,6 +635,9 @@ export function App() {
 
       mergeReportInCloud(merged, submitterToken).catch((err) => {
         console.warn('Could not merge report in cloud:', err);
+        setLocationNotice(
+          'Could not save your confirmation to the communal cloud. Please check your connection and try again.'
+        );
       });
     } else {
       setReports((prev) => [candidateReport, ...prev]);
@@ -645,9 +654,28 @@ export function App() {
         nearestBinCode: candidateReport.nearestBinCode,
       });
 
-      syncReportToCloud(candidateReport).catch((err) => {
-        console.warn('Could not sync new report to communal cloud:', err);
-      });
+      syncReportToCloud(candidateReport)
+        .then(() => {
+          const currentUid = auth?.currentUser?.uid;
+          if (currentUid && candidateReport.ownerUid !== currentUid) {
+            const withOwner = { ...candidateReport, ownerUid: currentUid };
+            setReports((prev) =>
+              prev.map((r) => (r.id === candidateReport.id ? { ...r, ownerUid: currentUid } : r))
+            );
+            setSelectedReport((prev) =>
+              prev?.id === candidateReport.id ? { ...prev, ownerUid: currentUid } : prev
+            );
+            setLastLoggedReport((prev) =>
+              prev?.id === candidateReport.id ? withOwner : prev
+            );
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not sync new report to communal cloud:', err);
+          setLocationNotice(
+            'Could not save your report to the communal cloud. Please check your connection and try again.'
+          );
+        });
     }
   };
 
@@ -738,6 +766,9 @@ export function App() {
       photoDataUrl: updated.photoDataUrl,
     }).catch((err) => {
       console.warn('Could not sync report details to cloud:', err);
+      setLocationNotice(
+        'Could not save optional details to the cloud. Only the report owner can edit details within 60 minutes.'
+      );
     });
   };
 
@@ -794,11 +825,22 @@ export function App() {
 
     deleteReportFromCloud(reportId).catch((err) => {
       console.warn('Could not undo report in cloud:', err);
+      setLocationNotice(
+        'Could not undo report in the cloud. Only the report owner can undo a report within 60 minutes.'
+      );
     });
   };
 
   const handleConfirmExistingReport = (reportId: string) => {
     const target = reports.find((r) => r.id === reportId);
+    if (
+      target &&
+      ((target.ownerUid && auth?.currentUser && target.ownerUid === auth.currentUser.uid) ||
+        target.submitterToken === submitterToken)
+    ) {
+      setLocationNotice('You cannot confirm (+1) your own report.');
+      return;
+    }
     const nextCount = (target?.confirmations ?? 1) + 1;
 
     setReports((prev) =>
@@ -820,6 +862,9 @@ export function App() {
 
     incrementConfirmationInCloud(reportId, submitterToken).catch((err) => {
       console.warn('Could not sync confirmation count to cloud:', err);
+      setLocationNotice(
+        'Could not save your +1 confirmation to the cloud. Please check your connection and try again.'
+      );
     });
   };
 
@@ -833,6 +878,7 @@ export function App() {
 
     clearReportsFromCloud(demoIds).catch((err) => {
       console.warn('Could not clear demo seeds from cloud:', err);
+      setLocationNotice('Could not clear demo reports from the cloud.');
     });
   };
 
@@ -845,6 +891,7 @@ export function App() {
 
     clearReportsFromCloud(allIds).catch((err) => {
       console.warn('Could not clear reports from cloud:', err);
+      setLocationNotice('Could not clear reports from the cloud.');
     });
   };
 
@@ -855,6 +902,7 @@ export function App() {
 
     seedDemoReportsToCloud(INITIAL_REPORTS).catch((err) => {
       console.warn('Could not seed demo reports to cloud:', err);
+      setLocationNotice('Could not restore demo reports in the cloud.');
     });
   };
 
@@ -994,6 +1042,9 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
 
     deleteReportFromCloud(reportId).catch((err) => {
       console.warn('Could not delete report from cloud:', err);
+      setLocationNotice(
+        'Could not delete report from the cloud. Only the report owner within 60 minutes (or an admin) can delete a report.'
+      );
     });
   };
 
@@ -1968,16 +2019,27 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                           </div>
                         ) : (
                           <>
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmExistingReport(selectedReport.id)}
-                              className="px-2.5 py-1.5 rounded-xl bg-canvas hover:bg-surface-container border border-line text-xs font-semibold text-ink transition-colors"
-                              title="Confirm you also saw this"
-                            >
-                              👍 +1 ({selectedReport.confirmations})
-                            </button>
+                            {!(
+                              (selectedReport.ownerUid &&
+                                auth?.currentUser &&
+                                selectedReport.ownerUid === auth.currentUser.uid) ||
+                              selectedReport.submitterToken === submitterToken
+                            ) && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmExistingReport(selectedReport.id)}
+                                className="px-2.5 py-1.5 rounded-xl bg-canvas hover:bg-surface-container border border-line text-xs font-semibold text-ink transition-colors"
+                                title="Confirm you also saw this"
+                              >
+                                👍 +1 ({selectedReport.confirmations})
+                              </button>
+                            )}
                             {(isAdminAuthenticated ||
-                              (selectedReport.submitterToken === submitterToken &&
+                              (Boolean(
+                                selectedReport.ownerUid &&
+                                  auth?.currentUser &&
+                                  selectedReport.ownerUid === auth.currentUser.uid
+                              ) &&
                                 Date.now() - new Date(selectedReport.createdAt).getTime() <
                                   60 * 60 * 1000)) && (
                               <button
@@ -2021,22 +2083,30 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                           {lastLoggedReport.streetName}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setExpandOptionalReportModal(true)}
-                          className="px-2.5 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-semibold"
-                        >
-                          + Add details / photo
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleUndoLastDrop}
-                          className="px-2 py-1.5 text-xs font-semibold text-muted hover:text-ink underline"
-                        >
-                          Undo
-                        </button>
-                      </div>
+                      {Boolean(
+                        lastLoggedReport.ownerUid &&
+                          auth?.currentUser &&
+                          lastLoggedReport.ownerUid === auth.currentUser.uid
+                      ) &&
+                        Date.now() - new Date(lastLoggedReport.createdAt).getTime() <
+                          60 * 60 * 1000 && (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setExpandOptionalReportModal(true)}
+                              className="px-2.5 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-semibold"
+                            >
+                              + Add details / photo
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleUndoLastDrop}
+                              className="px-2 py-1.5 text-xs font-semibold text-muted hover:text-ink underline"
+                            >
+                              Undo
+                            </button>
+                          </div>
+                        )}
                     </div>
                   </div>
                 )}

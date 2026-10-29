@@ -1,4 +1,5 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,11 +10,17 @@ import {
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  collection,
   doc,
+  getDoc,
+  getDocs,
   setDoc,
   updateDoc,
+  query,
+  orderBy,
   serverTimestamp,
   increment,
+  arrayUnion,
   Timestamp,
   setLogLevel,
 } from 'firebase/firestore';
@@ -356,6 +363,252 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
       updateDoc(doc(ownerDb, 'clean_greystones_reports', 'rep-owner-expired'), {
         note: 'Late edit after 65 minutes',
       })
+    );
+  });
+
+  it('B3 (Repeat +1): allows repeat +1 corroboration with the same submitterToken and denies note tampering on repeat +1', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
+    const voterDb = testEnv.authenticatedContext('voter-uid-2').firestore();
+
+    await assertSucceeds(
+      setDoc(
+        doc(ownerDb, 'clean_greystones_reports', 'rep-repeat-1'),
+        validReportPayload('rep-repeat-1', 'owner-uid-1')
+      )
+    );
+
+    // ALLOW: first +1 with GS-ANON-3333-4444 via arrayUnion
+    await assertSucceeds(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+      })
+    );
+
+    // ALLOW: repeat +1 from the same device/token (arrayUnion is a no-op on additionalSubmitters)
+    await assertSucceeds(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+      })
+    );
+
+    // DENY: repeat +1 that attempts to modify note or jump confirmations by +2
+    await assertFails(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+        note: 'Sneaky note edit on repeat +1',
+      })
+    );
+    await assertFails(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
+        confirmations: increment(2),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+      })
+    );
+  });
+
+  it('B5 (Unauthenticated corroboration): denies unauthenticated corroboration and allows authenticated corroboration', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
+    const unauthDb = testEnv.unauthenticatedContext().firestore();
+    const authedVoterDb = testEnv.authenticatedContext('voter-uid-2').firestore();
+
+    await assertSucceeds(
+      setDoc(
+        doc(ownerDb, 'clean_greystones_reports', 'rep-unauth-corrob'),
+        validReportPayload('rep-unauth-corrob', 'owner-uid-1')
+      )
+    );
+
+    // DENY: unauthenticated client cannot corroborate or fill additionalSubmitters
+    await assertFails(
+      updateDoc(doc(unauthDb, 'clean_greystones_reports', 'rep-unauth-corrob'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+      })
+    );
+
+    // ALLOW: authenticated client can corroborate
+    await assertSucceeds(
+      updateDoc(doc(authedVoterDb, 'clean_greystones_reports', 'rep-unauth-corrob'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+      })
+    );
+  });
+
+  it('B2 (Legacy-shaped doc): string createdAt, legacyCreatedAtString present, no ownerUid — denies owner edit/undo while allowing read and corroboration', async () => {
+    const callerDb = testEnv.authenticatedContext('caller-uid-1').firestore();
+
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rawDb = context.firestore();
+      const { ownerUid: _omitOwner, ...rest } = validReportPayload('rep-legacy-1', 'unused');
+      await setDoc(doc(rawDb, 'clean_greystones_reports', 'rep-legacy-1'), {
+        ...rest,
+        createdAt: '2026-10-22T14:20:00.000Z',
+        legacyCreatedAtString: '2026-10-22T14:20:00.000Z',
+      });
+    });
+
+    // ALLOW: reading the legacy-shaped doc
+    const snap = await assertSucceeds(
+      getDoc(doc(callerDb, 'clean_greystones_reports', 'rep-legacy-1'))
+    );
+    assert.equal(snap.exists(), true);
+
+    // ALLOW: authenticated corroboration (+1) on the legacy-shaped doc
+    await assertSucceeds(
+      updateDoc(doc(callerDb, 'clean_greystones_reports', 'rep-legacy-1'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+      })
+    );
+
+    // DENY: owner edit or undo on a legacy doc with no ownerUid
+    await assertFails(
+      updateDoc(doc(callerDb, 'clean_greystones_reports', 'rep-legacy-1'), {
+        note: 'Cannot edit legacy doc without ownerUid',
+      })
+    );
+    await assertFails(
+      updateDoc(doc(callerDb, 'clean_greystones_reports', 'rep-legacy-1'), {
+        status: 'deleted',
+        deletedAt: serverTimestamp(),
+      })
+    );
+  });
+
+  it('B4 (Owner confirming own report): denies pushing owner submitterToken into additionalSubmitters and allows merge without owner token', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
+
+    await assertSucceeds(
+      setDoc(
+        doc(ownerDb, 'clean_greystones_reports', 'rep-self-confirm'),
+        validReportPayload('rep-self-confirm', 'owner-uid-1')
+      )
+    );
+
+    // DENY: owner attempting to append their own submitterToken ('GS-ANON-1111-2222') to additionalSubmitters
+    await assertFails(
+      updateDoc(doc(ownerDb, 'clean_greystones_reports', 'rep-self-confirm'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-1111-2222'),
+      })
+    );
+
+    // ALLOW: merge update on own report that omits owner's own submitterToken from additionalSubmitters (as mergeReportInCloud does)
+    await assertSucceeds(
+      updateDoc(doc(ownerDb, 'clean_greystones_reports', 'rep-self-confirm'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        severity: 'stepped_in',
+      })
+    );
+  });
+
+  it('B1 (Migrated doc): Timestamp createdAt plus legacyCreatedAtString allows read, corroboration, and owner edit while denying legacyCreatedAtString tampering', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
+    const voterDb = testEnv.authenticatedContext('voter-uid-2').firestore();
+
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rawDb = context.firestore();
+      await setDoc(doc(rawDb, 'clean_greystones_reports', 'rep-migrated-1'), {
+        ...validReportPayload('rep-migrated-1', 'owner-uid-1'),
+        createdAt: Timestamp.now(),
+        legacyCreatedAtString: '2026-10-22T15:00:00.000Z',
+      });
+    });
+
+    // ALLOW: reading and corroborating migrated doc
+    await assertSucceeds(
+      getDoc(doc(voterDb, 'clean_greystones_reports', 'rep-migrated-1'))
+    );
+    await assertSucceeds(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-migrated-1'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+      })
+    );
+
+    // ALLOW: owner editing note on a fresh migrated doc while preserving legacyCreatedAtString
+    await assertSucceeds(
+      updateDoc(doc(ownerDb, 'clean_greystones_reports', 'rep-migrated-1'), {
+        note: 'Owner note on migrated report',
+      })
+    );
+
+    // DENY: owner or voter attempting to overwrite or delete legacyCreatedAtString
+    await assertFails(
+      updateDoc(doc(ownerDb, 'clean_greystones_reports', 'rep-migrated-1'), {
+        note: 'Tamper attempt',
+        legacyCreatedAtString: '1999-01-01T00:00:00.000Z',
+      })
+    );
+  });
+
+  it('B1 (Mixed collection ordering probe): proves string createdAt outranks Timestamp createdAt before migration and Timestamp ordering is restored after migration', async () => {
+    const readerDb = testEnv.authenticatedContext('reader-uid-1').firestore();
+
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rawDb = context.firestore();
+      // Legacy doc from 22 Oct 2026 stored with string createdAt
+      const { ownerUid: _omit, ...legacyBase } = validReportPayload('rep-order-legacy', 'unused');
+      await setDoc(doc(rawDb, 'clean_greystones_reports', 'rep-order-legacy'), {
+        ...legacyBase,
+        createdAt: '2026-10-22T09:00:00.000Z',
+      });
+
+      // Newer doc from 29 Oct 2026 stored with Timestamp createdAt
+      await setDoc(doc(rawDb, 'clean_greystones_reports', 'rep-order-timestamp'), {
+        ...validReportPayload('rep-order-timestamp', 'owner-uid-1'),
+        createdAt: Timestamp.fromDate(new Date('2026-10-29T09:00:00.000Z')),
+      });
+    });
+
+    // ALLOW: query mixed collection with orderBy('createdAt', 'desc')
+    // In Firestore's value type ordering, string > timestamp, so un-migrated string doc sorts first in desc order
+    const preMigrationSnap = await assertSucceeds(
+      getDocs(query(collection(readerDb, 'clean_greystones_reports'), orderBy('createdAt', 'desc')))
+    );
+    assert.deepEqual(
+      preMigrationSnap.docs.map((d) => d.id),
+      ['rep-order-legacy', 'rep-order-timestamp']
+    );
+
+    // DENY: non-admin client cannot convert or overwrite createdAt directly
+    await assertFails(
+      updateDoc(doc(readerDb, 'clean_greystones_reports', 'rep-order-legacy'), {
+        createdAt: Timestamp.fromDate(new Date('2026-10-22T09:00:00.000Z')),
+        legacyCreatedAtString: '2026-10-22T09:00:00.000Z',
+      })
+    );
+
+    // Apply the B1 admin migration (convert string createdAt -> Timestamp + legacyCreatedAtString)
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rawDb = context.firestore();
+      await updateDoc(doc(rawDb, 'clean_greystones_reports', 'rep-order-legacy'), {
+        createdAt: Timestamp.fromDate(new Date('2026-10-22T09:00:00.000Z')),
+        legacyCreatedAtString: '2026-10-22T09:00:00.000Z',
+      });
+    });
+
+    // ALLOW: after migration, orderBy('createdAt', 'desc') returns the newer 29 Oct doc before the 22 Oct doc
+    const postMigrationSnap = await assertSucceeds(
+      getDocs(query(collection(readerDb, 'clean_greystones_reports'), orderBy('createdAt', 'desc')))
+    );
+    assert.deepEqual(
+      postMigrationSnap.docs.map((d) => d.id),
+      ['rep-order-timestamp', 'rep-order-legacy']
     );
   });
 });
