@@ -9,6 +9,7 @@ export interface FoulingReport {
   ownerUid?: string;
   appStream?: CivicAppStream;
   createdAt: string; // ISO
+  legacyCreatedAtString?: string;
   lat: number;
   lng: number;
   accuracyM: number;

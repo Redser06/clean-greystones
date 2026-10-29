@@ -98,7 +98,12 @@ export function reconcileReportLog(
     confirmations: updatedConfirmations,
     lastConfirmedAt: newReport.createdAt,
     additionalSubmitters: existingAdditional,
-    note: match.note,
+    note:
+      newReport.note && !match.note?.includes(newReport.note)
+        ? match.note
+          ? `${match.note} · Note: ${newReport.note}`
+          : newReport.note
+        : match.note,
   };
 
   return {
