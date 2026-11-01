@@ -16,6 +16,7 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  deleteDoc,
   query,
   orderBy,
   serverTimestamp,
@@ -194,6 +195,8 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
   it('Fix 1 (Corroboration): allows valid +1 corroboration with severity escalation and denies note edits, severity de-escalation, or submitter padding', async () => {
     const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
     const strangerDb = testEnv.authenticatedContext('stranger-uid-2').firestore();
+    const secondStrangerDb = testEnv.authenticatedContext('stranger-uid-3').firestore();
+    const thirdStrangerDb = testEnv.authenticatedContext('stranger-uid-4').firestore();
 
     // Seed an active report with severity 'buggy_wheels' and note 'Original owner note'
     await assertSucceeds(
@@ -204,88 +207,88 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
       })
     );
 
-    // ALLOW: stranger corroborates (+1 confirmations, serverTimestamp lastConfirmedAt, 1 new submitter, escalated severity)
+    // ALLOW: stranger corroborates (+1 confirmations, serverTimestamp lastConfirmedAt, own uid appended, escalated severity)
     await assertSucceeds(
       updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['GS-ANON-3333-4444'],
+        additionalSubmitters: ['stranger-uid-2'],
         severity: 'stepped_in',
       })
     );
 
-    // ALLOW: second stranger corroborates (growing additionalSubmitters from 1 -> 2, keeping severity same)
+    // ALLOW: second stranger corroborates (growing additionalSubmitters from 1 -> 2 with their own uid, keeping severity same)
     await assertSucceeds(
-      updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
+      updateDoc(doc(secondStrangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['GS-ANON-3333-4444', 'GS-ANON-4444-5555'],
+        additionalSubmitters: ['stranger-uid-2', 'stranger-uid-3'],
       })
     );
 
-    // DENY: stranger tries to edit note during corroboration (or standalone)
+    // DENY: third stranger tries to edit note during otherwise valid corroboration
     await assertFails(
-      updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
+      updateDoc(doc(thirdStrangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['GS-ANON-3333-4444', 'GS-ANON-4444-5555', 'GS-ANON-5555-6666'],
+        additionalSubmitters: ['stranger-uid-2', 'stranger-uid-3', 'stranger-uid-4'],
         note: 'Defaced by stranger',
       })
     );
 
-    // DENY: severity de-escalation ('stepped_in' -> 'just_poop')
+    // DENY: severity de-escalation ('stepped_in' -> 'just_poop') even with valid new uid
     await assertFails(
-      updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
+      updateDoc(doc(thirdStrangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['GS-ANON-3333-4444', 'GS-ANON-4444-5555', 'GS-ANON-5555-6666'],
+        additionalSubmitters: ['stranger-uid-2', 'stranger-uid-3', 'stranger-uid-4'],
         severity: 'just_poop',
       })
     );
 
     // DENY: additionalSubmitters grows by 2 in one update
     await assertFails(
-      updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
+      updateDoc(doc(thirdStrangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
         additionalSubmitters: [
-          'GS-ANON-3333-4444',
-          'GS-ANON-4444-5555',
-          'GS-ANON-5555-6666',
-          'GS-ANON-7777-8888',
+          'stranger-uid-2',
+          'stranger-uid-3',
+          'stranger-uid-4',
+          'stranger-uid-5',
         ],
       })
     );
 
-    // DENY: additionalSubmitters padded with oversized string (>64 chars), duplicate submitter, or altered history
+    // DENY: additionalSubmitters padded with client-supplied fake token instead of request.auth.uid, duplicate uid, or altered history
     await assertFails(
-      updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
+      updateDoc(doc(thirdStrangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['GS-ANON-3333-4444', 'GS-ANON-4444-5555', 'X'.repeat(65)],
+        additionalSubmitters: ['stranger-uid-2', 'stranger-uid-3', 'GS-ANON-FAKE-TOKEN'],
       })
     );
     await assertFails(
       updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['GS-ANON-3333-4444', 'GS-ANON-4444-5555', 'GS-ANON-3333-4444'],
+        additionalSubmitters: ['stranger-uid-2', 'stranger-uid-3', 'stranger-uid-2'],
       })
     );
     await assertFails(
-      updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
+      updateDoc(doc(thirdStrangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['TAMPERED-FIRST-TOKEN', 'GS-ANON-4444-5555', 'GS-ANON-8888-9999'],
+        additionalSubmitters: ['TAMPERED-FIRST-UID', 'stranger-uid-3', 'stranger-uid-4'],
       })
     );
 
-    // DENY: confirmations incremented by 2 instead of 1
+    // DENY: confirmations incremented by 2 instead of 1 even with valid new uid
     await assertFails(
-      updateDoc(doc(strangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
+      updateDoc(doc(thirdStrangerDb, 'clean_greystones_reports', 'rep-corrob-1'), {
         confirmations: increment(2),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: ['GS-ANON-3333-4444', 'GS-ANON-4444-5555', 'GS-ANON-9999-0000'],
+        additionalSubmitters: ['stranger-uid-2', 'stranger-uid-3', 'stranger-uid-4'],
       })
     );
   });
@@ -366,7 +369,7 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
     );
   });
 
-  it('B3 (Repeat +1): allows repeat +1 corroboration with the same submitterToken and denies note tampering on repeat +1', async () => {
+  it('B3 (Repeat +1): denies repeat +1 corroboration from the same auth uid (one confirmation per auth uid)', async () => {
     const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
     const voterDb = testEnv.authenticatedContext('voter-uid-2').firestore();
 
@@ -377,38 +380,39 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
       )
     );
 
-    // ALLOW: first +1 with GS-ANON-3333-4444 via arrayUnion
+    // ALLOW: first +1 from voter-uid-2 appending request.auth.uid
     await assertSucceeds(
       updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+        additionalSubmitters: arrayUnion('voter-uid-2'),
       })
     );
 
-    // ALLOW: repeat +1 from the same device/token (arrayUnion is a no-op on additionalSubmitters)
-    await assertSucceeds(
-      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
-        confirmations: increment(1),
-        lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
-      })
-    );
-
-    // DENY: repeat +1 that attempts to modify note or jump confirmations by +2
+    // DENY: repeat +1 from the same auth uid via arrayUnion (additionalSubmitters does not change)
     await assertFails(
       updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
-        note: 'Sneaky note edit on repeat +1',
+        additionalSubmitters: arrayUnion('voter-uid-2'),
       })
     );
+
+    // DENY: repeat +1 from the same auth uid attempting to duplicate their uid in additionalSubmitters
     await assertFails(
       updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
-        confirmations: increment(2),
+        confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+        additionalSubmitters: ['voter-uid-2', 'voter-uid-2'],
+      })
+    );
+
+    // DENY: repeat +1 attempting to push a rotated/fake submitterToken under the same auth uid
+    await assertFails(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-repeat-1'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: ['voter-uid-2', 'GS-ANON-3333-4444'],
       })
     );
   });
@@ -430,16 +434,16 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
       updateDoc(doc(unauthDb, 'clean_greystones_reports', 'rep-unauth-corrob'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+        additionalSubmitters: arrayUnion('voter-uid-2'),
       })
     );
 
-    // ALLOW: authenticated client can corroborate
+    // ALLOW: authenticated client can corroborate with their own uid
     await assertSucceeds(
       updateDoc(doc(authedVoterDb, 'clean_greystones_reports', 'rep-unauth-corrob'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+        additionalSubmitters: arrayUnion('voter-uid-2'),
       })
     );
   });
@@ -463,12 +467,12 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
     );
     assert.equal(snap.exists(), true);
 
-    // ALLOW: authenticated corroboration (+1) on the legacy-shaped doc
+    // ALLOW: authenticated corroboration (+1) on the legacy-shaped doc with caller's uid
     await assertSucceeds(
       updateDoc(doc(callerDb, 'clean_greystones_reports', 'rep-legacy-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+        additionalSubmitters: arrayUnion('caller-uid-1'),
       })
     );
 
@@ -486,7 +490,7 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
     );
   });
 
-  it('B4 (Owner confirming own report): denies pushing owner submitterToken into additionalSubmitters and allows merge without owner token', async () => {
+  it('B4 (Owner confirming own report): denies owner confirming own report with ownerUid, submitterToken, or omitted additionalSubmitters', async () => {
     const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
 
     await assertSucceeds(
@@ -505,8 +509,17 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
       })
     );
 
-    // ALLOW: merge update on own report that omits owner's own submitterToken from additionalSubmitters (as mergeReportInCloud does)
-    await assertSucceeds(
+    // DENY: owner attempting to append their own ownerUid ('owner-uid-1') to additionalSubmitters
+    await assertFails(
+      updateDoc(doc(ownerDb, 'clean_greystones_reports', 'rep-self-confirm'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: arrayUnion('owner-uid-1'),
+      })
+    );
+
+    // DENY: owner or any caller attempting to increment confirmations without changing additionalSubmitters
+    await assertFails(
       updateDoc(doc(ownerDb, 'clean_greystones_reports', 'rep-self-confirm'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
@@ -536,7 +549,7 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
       updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-migrated-1'), {
         confirmations: increment(1),
         lastConfirmedAt: serverTimestamp(),
-        additionalSubmitters: arrayUnion('GS-ANON-3333-4444'),
+        additionalSubmitters: arrayUnion('voter-uid-2'),
       })
     );
 
@@ -610,5 +623,167 @@ describe('Firestore Security Rules Emulator Suite (PR #21 Review Hardening)', ()
       postMigrationSnap.docs.map((d) => d.id),
       ['rep-order-timestamp', 'rep-order-legacy']
     );
+  });
+
+  it('denies confirmation count inflation without a new request.auth.uid in additionalSubmitters', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-uid-1').firestore();
+    const voterDb = testEnv.authenticatedContext('voter-uid-2').firestore();
+
+    await assertSucceeds(
+      setDoc(
+        doc(ownerDb, 'clean_greystones_reports', 'rep-no-inflate'),
+        validReportPayload('rep-no-inflate', 'owner-uid-1')
+      )
+    );
+
+    // DENY: incrementing confirmations while omitting additionalSubmitters completely
+    await assertFails(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-no-inflate'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+      })
+    );
+
+    // DENY: incrementing confirmations while keeping additionalSubmitters unchanged ([])
+    await assertFails(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-no-inflate'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: [],
+      })
+    );
+
+    // DENY: incrementing confirmations while supplying a fake token instead of request.auth.uid
+    await assertFails(
+      updateDoc(doc(voterDb, 'clean_greystones_reports', 'rep-no-inflate'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: ['GS-ANON-FAKE-0001'],
+      })
+    );
+  });
+
+  it('enforces the 100-submitter cap on additionalSubmitters and rejects fake-token stuffing', async () => {
+    const first99 = Array.from({ length: 99 }, (_, i) => `voter-uid-${i + 1}`);
+
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rawDb = context.firestore();
+      await setDoc(doc(rawDb, 'clean_greystones_reports', 'rep-cap-100'), {
+        ...validReportPayload('rep-cap-100', 'owner-uid-0'),
+        createdAt: Timestamp.now(),
+        confirmations: 100,
+        additionalSubmitters: first99,
+      });
+    });
+
+    const voter100Db = testEnv.authenticatedContext('voter-uid-100').firestore();
+    const voter101Db = testEnv.authenticatedContext('voter-uid-101').firestore();
+
+    // ALLOW: 100th submitter (voter-uid-100) brings additionalSubmitters to exactly 100
+    await assertSucceeds(
+      updateDoc(doc(voter100Db, 'clean_greystones_reports', 'rep-cap-100'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: [...first99, 'voter-uid-100'],
+      })
+    );
+
+    // DENY: 101st submitter (voter-uid-101) exceeds the 100-submitter cap (size 101 > 100)
+    await assertFails(
+      updateDoc(doc(voter101Db, 'clean_greystones_reports', 'rep-cap-100'), {
+        confirmations: increment(1),
+        lastConfirmedAt: serverTimestamp(),
+        additionalSubmitters: [...first99, 'voter-uid-100', 'voter-uid-101'],
+      })
+    );
+  });
+
+  it('enforces event createdAt == request.time on clean_greystones_events creates', async () => {
+    const userDb = testEnv.authenticatedContext('user-uid-1').firestore();
+
+    // DENY: event create with future Timestamp createdAt
+    await assertFails(
+      setDoc(doc(userDb, 'clean_greystones_events', 'evt-future'), {
+        ...validEventPayload('evt-future', 'user-uid-1'),
+        createdAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
+      })
+    );
+
+    // DENY: event create with past Timestamp createdAt
+    await assertFails(
+      setDoc(doc(userDb, 'clean_greystones_events', 'evt-past'), {
+        ...validEventPayload('evt-past', 'user-uid-1'),
+        createdAt: Timestamp.fromMillis(Date.now() - 60 * 60 * 1000),
+      })
+    );
+
+    // DENY: event create with string createdAt instead of serverTimestamp
+    await assertFails(
+      setDoc(doc(userDb, 'clean_greystones_events', 'evt-string'), {
+        ...validEventPayload('evt-string', 'user-uid-1'),
+        createdAt: '2026-10-26T12:00:00.000Z',
+      })
+    );
+
+    // ALLOW: event create with createdAt == request.time (serverTimestamp)
+    await assertSucceeds(
+      setDoc(
+        doc(userDb, 'clean_greystones_events', 'evt-now'),
+        validEventPayload('evt-now', 'user-uid-1')
+      )
+    );
+  });
+
+  it('restricts clean_greystones_events read access strictly to admins (never public)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rawDb = context.firestore();
+      await setDoc(doc(rawDb, 'clean_greystones_events', 'evt-secret-1'), {
+        ...validEventPayload('evt-secret-1', 'owner-uid-1'),
+        createdAt: Timestamp.now(),
+      });
+    });
+
+    const unauthDb = testEnv.unauthenticatedContext().firestore();
+    const ownerNonAdminDb = testEnv.authenticatedContext('owner-uid-1').firestore();
+    const strangerDb = testEnv.authenticatedContext('stranger-uid-2').firestore();
+    const adminDb = testEnv.authenticatedContext('admin-uid-1', { admin: true }).firestore();
+
+    // DENY: unauthenticated getDoc / getDocs on clean_greystones_events
+    await assertFails(getDoc(doc(unauthDb, 'clean_greystones_events', 'evt-secret-1')));
+    await assertFails(getDocs(collection(unauthDb, 'clean_greystones_events')));
+
+    // DENY: signed-in non-admin (including event ownerUid) getDoc / getDocs on clean_greystones_events
+    await assertFails(getDoc(doc(ownerNonAdminDb, 'clean_greystones_events', 'evt-secret-1')));
+    await assertFails(getDocs(collection(ownerNonAdminDb, 'clean_greystones_events')));
+    await assertFails(getDoc(doc(strangerDb, 'clean_greystones_events', 'evt-secret-1')));
+
+    // ALLOW: verified admin getDoc / getDocs on clean_greystones_events
+    await assertSucceeds(getDoc(doc(adminDb, 'clean_greystones_events', 'evt-secret-1')));
+    await assertSucceeds(getDocs(collection(adminDb, 'clean_greystones_events')));
+  });
+
+  it('denies signed-in non-admins and unauthenticated users from writing admin_roles', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const rawDb = context.firestore();
+      await setDoc(doc(rawDb, 'admin_roles', 'existing-admin'), { role: 'admin' });
+    });
+
+    const unauthDb = testEnv.unauthenticatedContext().firestore();
+    const nonAdminDb = testEnv.authenticatedContext('user-uid-1').firestore();
+    const adminDb = testEnv.authenticatedContext('admin-uid-1', { admin: true }).firestore();
+
+    // DENY: unauthenticated user writing admin_roles
+    await assertFails(setDoc(doc(unauthDb, 'admin_roles', 'anon-uid'), { role: 'admin' }));
+
+    // DENY: signed-in non-admin attempting self-promotion or granting another user admin role
+    await assertFails(setDoc(doc(nonAdminDb, 'admin_roles', 'user-uid-1'), { role: 'admin' }));
+    await assertFails(setDoc(doc(nonAdminDb, 'admin_roles', 'other-uid'), { role: 'admin' }));
+
+    // DENY: signed-in non-admin updating or deleting an existing admin_roles doc
+    await assertFails(updateDoc(doc(nonAdminDb, 'admin_roles', 'existing-admin'), { role: 'user' }));
+    await assertFails(deleteDoc(doc(nonAdminDb, 'admin_roles', 'existing-admin')));
+
+    // ALLOW: verified admin writing admin_roles
+    await assertSucceeds(setDoc(doc(adminDb, 'admin_roles', 'new-admin-uid'), { role: 'admin' }));
   });
 });

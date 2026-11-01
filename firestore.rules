@@ -35,9 +35,11 @@ service cloud.firestore {
         && newList.size() <= 100
         && (oldList.size() == 0 || newList[0:oldList.size()] == oldList)
         && newList[oldList.size()] is string
-        && newList[oldList.size()].size() >= 6
-        && newList[oldList.size()].size() <= 64
+        && newList[oldList.size()] == request.auth.uid
+        && newList[oldList.size()].size() >= 1
+        && newList[oldList.size()].size() <= 128
         && !(newList[oldList.size()] in oldList)
+        && (!('ownerUid' in oldData) || newList[oldList.size()] != oldData.ownerUid)
         && newList[oldList.size()] != oldData.submitterToken;
     }
 
@@ -208,17 +210,14 @@ service cloud.firestore {
         request.auth != null &&
         resource.data.status == 'spotted' &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['additionalSubmitters', 'confirmations', 'lastConfirmedAt', 'severity']) &&
-        request.resource.data.diff(resource.data).affectedKeys().hasAll(['confirmations', 'lastConfirmedAt']) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasAll(['additionalSubmitters', 'confirmations', 'lastConfirmedAt']) &&
         request.resource.data.confirmations is int &&
         request.resource.data.confirmations == resource.data.confirmations + 1 &&
         request.resource.data.lastConfirmedAt is timestamp &&
         request.resource.data.lastConfirmedAt == request.time &&
         severityRank(request.resource.data.severity) >= severityRank(resource.data.severity) &&
         severityRank(request.resource.data.severity) > 0 &&
-        (
-          !('additionalSubmitters' in request.resource.data.diff(resource.data).affectedKeys()) ||
-          isValidAdditionalSubmittersGrowth(resource.data, request.resource.data)
-        )
+        isValidAdditionalSubmittersGrowth(resource.data, request.resource.data)
       ) || (
         // Path 2: Authenticated owner adding optional note/photo or undoing accidental tap within 60 minutes
         request.auth != null &&

@@ -16,6 +16,7 @@ import {
   serverTimestamp,
   increment,
   arrayUnion,
+  Timestamp,
   Unsubscribe,
 } from 'firebase/firestore';
 import {
@@ -395,22 +396,63 @@ export async function deleteReportFromCloud(reportId: string): Promise<void> {
   }
 }
 
+const confirmedReportKeys = new Set<string>();
+
+/**
+ * Checks whether the current user (by Firebase Auth uid or local submitterToken)
+ * is the report owner or has already confirmed (+1) this report.
+ */
+export function hasUserAlreadyConfirmedReport(
+  report:
+    | Pick<FoulingReport, 'id' | 'ownerUid' | 'submitterToken' | 'additionalSubmitters'>
+    | null
+    | undefined,
+  uid?: string | null,
+  submitterToken?: string
+): boolean {
+  if (!report) return false;
+  if (uid) {
+    if (report.ownerUid === uid) return true;
+    if (report.additionalSubmitters?.includes(uid)) return true;
+    if (confirmedReportKeys.has(`${uid}:${report.id}`)) return true;
+  }
+  if (submitterToken) {
+    if (report.submitterToken === submitterToken) return true;
+    if (report.additionalSubmitters?.includes(submitterToken)) return true;
+    if (confirmedReportKeys.has(`${submitterToken}:${report.id}`)) return true;
+  }
+  return false;
+}
+
 /**
  * Increments the confirmation (+1) count for a report in the communal cloud backend
- * using Firestore increment(1), serverTimestamp(), and arrayUnion(submitterToken).
+ * using Firestore increment(1), serverTimestamp(), and arrayUnion(request.auth.uid).
+ * Repeat +1 from the same user is a client-side no-op.
  */
 export async function incrementConfirmationInCloud(
   reportId: string,
-  submitterToken: string
+  submitterToken?: string,
+  existingReport?: Pick<FoulingReport, 'id' | 'ownerUid' | 'submitterToken' | 'additionalSubmitters'>
 ): Promise<void> {
   if (!db) return;
   try {
-    await ensureAnonymousAuth();
+    const user = await ensureAnonymousAuth();
+    if (
+      confirmedReportKeys.has(`${user.uid}:${reportId}`) ||
+      (submitterToken && confirmedReportKeys.has(`${submitterToken}:${reportId}`)) ||
+      hasUserAlreadyConfirmedReport(existingReport, user.uid, submitterToken)
+    ) {
+      return;
+    }
+    confirmedReportKeys.add(`${user.uid}:${reportId}`);
+    if (submitterToken) {
+      confirmedReportKeys.add(`${submitterToken}:${reportId}`);
+    }
     const docRef = doc(db, REPORTS_COLLECTION, reportId);
     await updateDoc(docRef, {
       confirmations: increment(1),
       lastConfirmedAt: serverTimestamp(),
-      additionalSubmitters: arrayUnion(submitterToken),
+      additionalSubmitters: arrayUnion(user.uid),
     });
   } catch (err) {
     console.error('Failed to increment confirmation in cloud:', err);
@@ -436,14 +478,44 @@ export async function clearReportsFromCloud(reportIds: string[]): Promise<void> 
 }
 
 /**
- * Batch seeds demo reports to cloud for testing.
+ * Converts a FoulingReport into a cloud payload with Firestore Timestamp fields.
+ */
+export function buildSeededReportCloudPayload(rep: FoulingReport): Record<string, unknown> {
+  const parsedCreated = new Date(rep.createdAt);
+  const createdAtTimestamp = Number.isNaN(parsedCreated.getTime())
+    ? Timestamp.now()
+    : Timestamp.fromDate(parsedCreated);
+
+  const payload: Record<string, unknown> = {
+    ...rep,
+    createdAt: createdAtTimestamp,
+  };
+
+  if (typeof rep.lastConfirmedAt === 'string') {
+    const parsedConfirmed = new Date(rep.lastConfirmedAt);
+    if (!Number.isNaN(parsedConfirmed.getTime())) {
+      payload.lastConfirmedAt = Timestamp.fromDate(parsedConfirmed);
+    } else {
+      delete payload.lastConfirmedAt;
+    }
+  }
+
+  return payload;
+}
+
+/**
+ * Batch seeds demo reports to cloud for testing, writing Firestore Timestamps (not strings).
  */
 export async function seedDemoReportsToCloud(reports: FoulingReport[]): Promise<void> {
   if (!db || reports.length === 0) return;
   try {
     const batch = writeBatch(db);
     reports.forEach((rep) => {
-      batch.set(doc(db, REPORTS_COLLECTION, rep.id), rep, { merge: true });
+      batch.set(
+        doc(db, REPORTS_COLLECTION, rep.id),
+        buildSeededReportCloudPayload(rep),
+        { merge: true }
+      );
     });
     await batch.commit();
   } catch (err) {
@@ -516,6 +588,7 @@ export async function fetchLiveReportsFromCloud(): Promise<FoulingReport[]> {
 /**
  * Updates an existing primary report when a nearby observation (<=15m) is merged into it.
  * Only modifies the fields permitted by Firestore corroboration security rules (note is immutable).
+ * Repeat merge/corroboration from the same user is a client-side no-op.
  */
 export async function mergeReportInCloud(
   primaryReport: FoulingReport,
@@ -523,24 +596,27 @@ export async function mergeReportInCloud(
 ): Promise<void> {
   if (!db) return;
   try {
-    await ensureAnonymousAuth();
+    const user = await ensureAnonymousAuth();
+    if (
+      confirmedReportKeys.has(`${user.uid}:${primaryReport.id}`) ||
+      (corroboratingToken && confirmedReportKeys.has(`${corroboratingToken}:${primaryReport.id}`)) ||
+      primaryReport.ownerUid === user.uid ||
+      primaryReport.additionalSubmitters?.includes(user.uid) ||
+      (corroboratingToken && primaryReport.submitterToken === corroboratingToken)
+    ) {
+      return;
+    }
+    confirmedReportKeys.add(`${user.uid}:${primaryReport.id}`);
+    if (corroboratingToken) {
+      confirmedReportKeys.add(`${corroboratingToken}:${primaryReport.id}`);
+    }
     const docRef = doc(db, REPORTS_COLLECTION, primaryReport.id);
-    const candidateToken =
-      corroboratingToken ||
-      primaryReport.additionalSubmitters?.[primaryReport.additionalSubmitters.length - 1];
-    const tokenToAdd =
-      candidateToken && candidateToken !== primaryReport.submitterToken
-        ? candidateToken
-        : undefined;
-    const payload: Record<string, unknown> = {
+    await updateDoc(docRef, {
       confirmations: increment(1),
       severity: primaryReport.severity,
       lastConfirmedAt: serverTimestamp(),
-    };
-    if (tokenToAdd) {
-      payload.additionalSubmitters = arrayUnion(tokenToAdd);
-    }
-    await updateDoc(docRef, payload);
+      additionalSubmitters: arrayUnion(user.uid),
+    });
   } catch (err) {
     console.error('Failed to merge report in cloud:', err);
     throw err;
