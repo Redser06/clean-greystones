@@ -6,37 +6,99 @@
  * into Firestore `Timestamp` values while preserving the original string in
  * `legacyCreatedAtString` for auditability.
  *
+ * Defaults to DRY-RUN mode (no writes). Pass `--apply` to execute writes.
+ * Requires explicit target project via `--project <id>` (or `FIREBASE_PROJECT_ID` / `GCLOUD_PROJECT`).
+ *
  * Usage:
  *   GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json \
- *     node scripts/migrate-created-at.mjs --dry-run
+ *     node scripts/migrate-created-at.mjs --project rapid-prototyping-4134c
  *
  *   GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json \
- *     node scripts/migrate-created-at.mjs
+ *     node scripts/migrate-created-at.mjs --project rapid-prototyping-4134c --apply
  */
 
+import { pathToFileURL } from 'node:url';
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 
 const COLLECTION_NAME = 'clean_greystones_reports';
-const PROJECT_ID =
-  process.env.FIREBASE_PROJECT_ID ||
-  process.env.GCLOUD_PROJECT ||
-  'rapid-prototyping-4134c';
 
-const isDryRun = process.argv.includes('--dry-run');
+export function parseMigrationArgs(argv = process.argv.slice(2), env = process.env) {
+  let applyFlag = false;
+  let dryRunFlag = false;
+  let cliProjectId = '';
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--apply') {
+      applyFlag = true;
+    } else if (arg === '--dry-run') {
+      dryRunFlag = true;
+    } else if (arg === '--project') {
+      const next = argv[i + 1];
+      if (!next || next.startsWith('-')) {
+        throw new Error('Missing value for --project <projectId>.');
+      }
+      cliProjectId = next.trim();
+      i++;
+    } else if (arg.startsWith('--project=')) {
+      const val = arg.slice('--project='.length).trim();
+      if (!val) {
+        throw new Error('Missing value for --project=<projectId>.');
+      }
+      cliProjectId = val;
+    } else {
+      throw new Error(
+        `Unknown argument "${arg}". Allowed flags: --dry-run (default), --apply, --project <projectId>.`
+      );
+    }
+  }
+
+  if (applyFlag && dryRunFlag) {
+    throw new Error('Cannot pass both --apply and --dry-run.');
+  }
+
+  const projectId = (cliProjectId || env.FIREBASE_PROJECT_ID || env.GCLOUD_PROJECT || '').trim();
+  if (!projectId) {
+    throw new Error(
+      'Target Firebase project is required explicitly. Pass --project <projectId> or set FIREBASE_PROJECT_ID.'
+    );
+  }
+
+  const isApply = applyFlag;
+  const isDryRun = !isApply;
+
+  return {
+    projectId,
+    isApply,
+    isDryRun,
+  };
+}
 
 async function main() {
+  let parsed;
+  try {
+    parsed = parseMigrationArgs();
+  } catch (err) {
+    console.error(`[migrate-created-at] Argument error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
+  const { projectId, isDryRun } = parsed;
+
+  console.log(`[migrate-created-at] Target project: ${projectId}`);
+  console.log(
+    `[migrate-created-at] Project: ${projectId} | Collection: ${COLLECTION_NAME} | Mode: ${
+      isDryRun ? 'DRY-RUN (default, no writes — pass --apply to write)' : 'LIVE WRITE (--apply)'
+    }`
+  );
+
   initializeApp({
     credential: applicationDefault(),
-    projectId: PROJECT_ID,
+    projectId,
   });
 
   const db = getFirestore();
-  console.log(
-    `[migrate-created-at] Project: ${PROJECT_ID} | Collection: ${COLLECTION_NAME} | Mode: ${
-      isDryRun ? 'DRY-RUN (no writes)' : 'LIVE WRITE'
-    }`
-  );
 
   const snapshot = await db.collection(COLLECTION_NAME).get();
   console.log(`[migrate-created-at] Scanned ${snapshot.size} total document(s).\n`);
@@ -117,7 +179,12 @@ async function main() {
   );
 }
 
-main().catch((err) => {
-  console.error('[migrate-created-at] Fatal error:', err);
-  process.exit(1);
-});
+const isDirectRun =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error('[migrate-created-at] Fatal error:', err);
+    process.exit(1);
+  });
+}

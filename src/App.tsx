@@ -35,6 +35,7 @@ import { isAdminSessionActive } from './utils/adminAnalytics';
 import {
   auth,
   ensureAnonymousAuth,
+  hasUserAlreadyConfirmedReport,
   isValidCrowdsourcedReport,
   subscribeToCrowdsourcedReports,
   syncReportToCloud,
@@ -614,7 +615,23 @@ export function App() {
     const reconcileRes = reconcileReportLog(candidateReport, reports, 15);
 
     if (reconcileRes.action === 'merged') {
-      const merged = reconcileRes.primaryReport;
+      const existingTarget = reports.find((r) => r.id === reconcileRes.primaryReport.id);
+      const currentUid = auth?.currentUser?.uid;
+      if (hasUserAlreadyConfirmedReport(existingTarget, currentUid, submitterToken)) {
+        if (existingTarget) {
+          setSelectedReport(existingTarget);
+        }
+        return;
+      }
+
+      const mergedAdditional = [...(reconcileRes.primaryReport.additionalSubmitters || [])];
+      if (currentUid && !mergedAdditional.includes(currentUid)) {
+        mergedAdditional.push(currentUid);
+      }
+      const merged: FoulingReport = {
+        ...reconcileRes.primaryReport,
+        additionalSubmitters: mergedAdditional,
+      };
       setReports((prev) => prev.map((r) => (r.id === merged.id ? merged : r)));
       setSelectedReport(merged);
       setLastLoggedReport(merged);
@@ -633,7 +650,10 @@ export function App() {
         nearestBinCode: merged.nearestBinCode,
       });
 
-      mergeReportInCloud(merged, submitterToken).catch((err) => {
+      mergeReportInCloud(
+        existingTarget ? { ...existingTarget, severity: merged.severity } : merged,
+        submitterToken
+      ).catch((err) => {
         console.warn('Could not merge report in cloud:', err);
         setLocationNotice(
           'Could not save your confirmation to the communal cloud. Please check your connection and try again.'
@@ -833,34 +853,49 @@ export function App() {
 
   const handleConfirmExistingReport = (reportId: string) => {
     const target = reports.find((r) => r.id === reportId);
+    if (!target) return;
+    const currentUid = auth?.currentUser?.uid;
     if (
-      target &&
-      ((target.ownerUid && auth?.currentUser && target.ownerUid === auth.currentUser.uid) ||
-        target.submitterToken === submitterToken)
+      (target.ownerUid && currentUid && target.ownerUid === currentUid) ||
+      target.submitterToken === submitterToken
     ) {
       setLocationNotice('You cannot confirm (+1) your own report.');
       return;
     }
-    const nextCount = (target?.confirmations ?? 1) + 1;
+    if (hasUserAlreadyConfirmedReport(target, currentUid, submitterToken)) {
+      return;
+    }
+    const nextCount = (target.confirmations ?? 1) + 1;
+    const nextAdditional = [...(target.additionalSubmitters || [])];
+    if (currentUid && !nextAdditional.includes(currentUid)) {
+      nextAdditional.push(currentUid);
+    }
+    if (submitterToken && !nextAdditional.includes(submitterToken)) {
+      nextAdditional.push(submitterToken);
+    }
 
     setReports((prev) =>
       prev.map((r) =>
-        r.id === reportId ? { ...r, confirmations: nextCount } : r
+        r.id === reportId
+          ? { ...r, confirmations: nextCount, additionalSubmitters: nextAdditional }
+          : r
       )
     );
     if (selectedReport?.id === reportId) {
       setSelectedReport((prev) =>
-        prev ? { ...prev, confirmations: nextCount } : null
+        prev
+          ? { ...prev, confirmations: nextCount, additionalSubmitters: nextAdditional }
+          : null
       );
     }
 
     recordCivicEvent('report_corroborated', {
       reportId,
-      streetName: target?.streetName,
-      nearestBinCode: target?.nearestBinCode,
+      streetName: target.streetName,
+      nearestBinCode: target.nearestBinCode,
     });
 
-    incrementConfirmationInCloud(reportId, submitterToken).catch((err) => {
+    incrementConfirmationInCloud(reportId, submitterToken, target).catch((err) => {
       console.warn('Could not sync confirmation count to cloud:', err);
       setLocationNotice(
         'Could not save your +1 confirmation to the cloud. Please check your connection and try again.'

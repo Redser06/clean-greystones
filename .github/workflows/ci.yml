@@ -7,6 +7,9 @@ on:
     paths:
       - 'firestore.rules'
       - 'src/**'
+      - 'scripts/**'
+      - 'public/**'
+      - 'firebase.json'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig*.json'
@@ -40,6 +43,12 @@ jobs:
 
       - name: Run Tests
         run: npm test
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
 
       - name: Run Firestore rules tests
         run: npm run test:rules

@@ -37,12 +37,15 @@ import {
 import {
   verifyUserAdminRole,
   clearAllLiveReportsFromCloud,
+  hasUserAlreadyConfirmedReport,
+  buildSeededReportCloudPayload,
 } from '../utils/firebaseSync';
+import { Timestamp } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { CivicActionEvent, FoulingReport } from '../types';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -356,5 +359,89 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
     );
     window.sessionStorage.removeItem('greystones_civic_common_admin_session_v1');
     assert.equal(isAdminSessionActive(), false);
+  });
+
+  it('makes repeat +1 from the same user or report owner a client-side no-op', () => {
+    const report = {
+      id: 'rep-confirm-check',
+      ownerUid: 'owner-uid-1',
+      submitterToken: 'GS-ANON-1111-2222',
+      additionalSubmitters: ['voter-uid-2', 'GS-ANON-3333-4444'],
+    };
+
+    // Report owner is blocked from confirming
+    assert.equal(hasUserAlreadyConfirmedReport(report, 'owner-uid-1', 'GS-ANON-9999-9999'), true);
+    assert.equal(hasUserAlreadyConfirmedReport(report, 'other-uid', 'GS-ANON-1111-2222'), true);
+
+    // Existing corroborator (by uid or token) is treated as already confirmed (no-op)
+    assert.equal(hasUserAlreadyConfirmedReport(report, 'voter-uid-2', 'GS-ANON-0000-0000'), true);
+    assert.equal(hasUserAlreadyConfirmedReport(report, 'fresh-uid', 'GS-ANON-3333-4444'), true);
+
+    // Distinct new user who has not confirmed yet returns false
+    assert.equal(hasUserAlreadyConfirmedReport(report, 'voter-uid-3', 'GS-ANON-5555-6666'), false);
+  });
+
+  it('converts createdAt and lastConfirmedAt to Firestore Timestamps when seeding demo reports to cloud', () => {
+    const sample: FoulingReport = {
+      ...mockReports[0],
+      createdAt: '2026-10-22T10:15:00.000Z',
+      lastConfirmedAt: '2026-10-22T11:30:00.000Z',
+    };
+    const payload = buildSeededReportCloudPayload(sample);
+    assert.ok(payload.createdAt instanceof Timestamp, 'createdAt must be a Firestore Timestamp');
+    assert.equal(
+      (payload.createdAt as Timestamp).toDate().toISOString(),
+      '2026-10-22T10:15:00.000Z'
+    );
+    assert.ok(
+      payload.lastConfirmedAt instanceof Timestamp,
+      'lastConfirmedAt must be a Firestore Timestamp'
+    );
+    assert.equal(
+      (payload.lastConfirmedAt as Timestamp).toDate().toISOString(),
+      '2026-10-22T11:30:00.000Z'
+    );
+  });
+
+  it('migrate-created-at CLI parser defaults to dry-run, requires --apply to write, rejects unknown flags, and requires explicit project', async () => {
+    const scriptUrl = pathToFileURL(
+      path.resolve(__dirname, '../../scripts/migrate-created-at.mjs')
+    ).href;
+    const { parseMigrationArgs } = (await import(scriptUrl)) as {
+      parseMigrationArgs: (
+        argv?: string[],
+        env?: Record<string, string | undefined>
+      ) => { projectId: string; isApply: boolean; isDryRun: boolean };
+    };
+
+    // Missing project is rejected
+    assert.throws(
+      () => parseMigrationArgs([], {}),
+      /Target Firebase project is required explicitly/
+    );
+
+    // Default mode with explicit project is dry-run
+    const defaultRun = parseMigrationArgs(['--project', 'demo-clean-greystones'], {});
+    assert.equal(defaultRun.projectId, 'demo-clean-greystones');
+    assert.equal(defaultRun.isDryRun, true);
+    assert.equal(defaultRun.isApply, false);
+
+    // Explicit --apply enables live writes
+    const applyRun = parseMigrationArgs(['--project=demo-clean-greystones', '--apply'], {});
+    assert.equal(applyRun.projectId, 'demo-clean-greystones');
+    assert.equal(applyRun.isDryRun, false);
+    assert.equal(applyRun.isApply, true);
+
+    // Unknown flags (such as --dryrun typo) are rejected instead of writing live
+    assert.throws(
+      () => parseMigrationArgs(['--project', 'demo-clean-greystones', '--dryrun'], {}),
+      /Unknown argument "--dryrun"/
+    );
+
+    // Conflicting --apply and --dry-run are rejected
+    assert.throws(
+      () => parseMigrationArgs(['--project', 'demo-clean-greystones', '--apply', '--dry-run'], {}),
+      /Cannot pass both --apply and --dry-run/
+    );
   });
 });
