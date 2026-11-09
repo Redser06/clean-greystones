@@ -444,4 +444,37 @@ describe('Clean Greystones Product Metrics & Secure Admin Suite', () => {
       /Cannot pass both --apply and --dry-run/
     );
   });
+
+  it('prevents Service Worker from intercepting cross-origin map tiles, fonts, and stylesheets and permits them in CSP connect-src', () => {
+    const swPath = path.resolve(__dirname, '../../public/sw.js');
+    const swContent = fs.readFileSync(swPath, 'utf-8');
+    assert.ok(
+      swContent.includes('if (url.origin !== self.location.origin) return;'),
+      'public/sw.js must ignore cross-origin requests so Service Worker fetch() does not hijack map tiles or fonts'
+    );
+
+    const firebaseJsonPath = path.resolve(__dirname, '../../firebase.json');
+    const firebaseConfig = JSON.parse(fs.readFileSync(firebaseJsonPath, 'utf-8'));
+    const allHeaders = firebaseConfig.hosting.headers.find((h: { source: string }) => h.source === '**');
+    const cspHeader = allHeaders.headers.find((h: { key: string }) => h.key === 'Content-Security-Policy');
+    assert.ok(cspHeader, 'Content-Security-Policy header must exist in firebase.json');
+
+    const connectSrcMatch = cspHeader.value.match(/connect-src\s+([^;]+);/);
+    assert.ok(connectSrcMatch, 'CSP must define connect-src');
+    const connectSrc = connectSrcMatch[1];
+
+    for (const requiredOrigin of [
+      'https://fonts.googleapis.com',
+      'https://fonts.gstatic.com',
+      'https://unpkg.com',
+      'https://*.google.com',
+      'https://*.basemaps.cartocdn.com',
+      'https://*.tile.openstreetmap.org',
+    ]) {
+      assert.ok(
+        connectSrc.includes(requiredOrigin),
+        `CSP connect-src must permit ${requiredOrigin} so Service Worker transitions never block map tiles or fonts`
+      );
+    }
+  });
 });
