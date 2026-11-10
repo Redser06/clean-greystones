@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clean-greystones-v4';
+const CACHE_NAME = 'clean-greystones-v5';
 const PRECACHE_ASSETS = [
   '/manifest.json',
   '/favicon.ico',
@@ -35,6 +35,9 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
+
+  // Never intercept cross-origin requests (map tiles, Google Fonts, unpkg CDN, Firebase APIs)
+  if (url.origin !== self.location.origin) return;
 
   // For HTML navigation requests and /index.html (or /), always use Network First (bypassing stale cache)
   if (
