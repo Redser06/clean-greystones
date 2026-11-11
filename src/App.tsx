@@ -11,6 +11,7 @@ import {
 import {
   CivicActionEvent,
   CivicEventType,
+  DecisionTriageState,
   EmailTemplateId,
   FoulingReport,
   MapTimeRange,
@@ -29,6 +30,10 @@ import {
   reencodePhotoToSafeJpeg,
   selectVerifiedCitations,
 } from './utils/graphEngine';
+import {
+  evaluateCivicReportDecision,
+  isGeminiDecisionConfigured,
+} from './utils/geminiDecision';
 import { GreystonesMapView } from './components/GreystonesMapView';
 import { AdminBackendView } from './components/AdminBackendView';
 import { isAdminSessionActive } from './utils/adminAnalytics';
@@ -490,7 +495,15 @@ export function App() {
   const [optionalNote, setOptionalNote] = useState<string>('');
   const [optionalPhotoPreview, setOptionalPhotoPreview] = useState<string | null>(null);
   const [noteWarnings, setNoteWarnings] = useState<string[]>([]);
+  const [decisionTriage, setDecisionTriage] = useState<DecisionTriageState>({ status: 'idle' });
+  const triageAbortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      triageAbortRef.current?.abort();
+    };
+  }, []);
 
   // Email Builder State
   const [selectedCouncillorIds, setSelectedCouncillorIds] = useState<string[]>(
@@ -638,6 +651,8 @@ export function App() {
       setOptionalNote('');
       setOptionalPhotoPreview(null);
       setNoteWarnings([]);
+      triageAbortRef.current?.abort();
+      setDecisionTriage({ status: 'idle' });
       dismissLiveBanner();
       setCorroborationNotice(
         `Corroborated existing observation on ${merged.streetName}! Added your verification (+1).`
@@ -666,6 +681,8 @@ export function App() {
       setOptionalNote('');
       setOptionalPhotoPreview(null);
       setNoteWarnings([]);
+      triageAbortRef.current?.abort();
+      setDecisionTriage({ status: 'idle' });
       dismissLiveBanner();
 
       recordCivicEvent('report_logged', {
@@ -754,9 +771,74 @@ export function App() {
 
 
 
+  const runPhotoAndNoteDecisionTriage = (photoDataUrl: string | null, noteText: string) => {
+    triageAbortRef.current?.abort();
+
+    if (!isGeminiDecisionConfigured()) {
+      setDecisionTriage({ status: 'unconfigured' });
+      return;
+    }
+
+    const controller = new AbortController();
+    triageAbortRef.current = controller;
+    setDecisionTriage({ status: 'evaluating' });
+
+    evaluateCivicReportDecision(
+      {
+        photoDataUrl,
+        note: noteText,
+        streetName: lastLoggedReport?.streetName ?? draftContext.streetName,
+        areaName: lastLoggedReport?.areaName ?? draftContext.areaName,
+        dBinAllM: lastLoggedReport?.dBinAllM ?? draftContext.dBinAllM,
+        currentSeverity: lastLoggedReport?.severity ?? selectedSeverity,
+      },
+      { signal: controller.signal }
+    )
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        if (result.allowedToPublish) {
+          setDecisionTriage({ status: 'verified', result });
+          setNoteWarnings([]);
+        } else {
+          setDecisionTriage({ status: 'blocked', result });
+          setNoteWarnings(result.blockingReasons);
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setDecisionTriage({
+          status: 'error',
+          message:
+            err instanceof Error
+              ? err.message
+              : 'Could not reach Gemini Decisions API for photo triage.',
+        });
+      });
+  };
+
+  const handleClearOptionalPhoto = () => {
+    triageAbortRef.current?.abort();
+    setOptionalPhotoPreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    setDecisionTriage({ status: 'idle' });
+    setNoteWarnings([]);
+  };
+
   const handleSaveOptionalDetails = (e: React.FormEvent) => {
     e.preventDefault();
     if (!lastLoggedReport) return;
+
+    if (decisionTriage.status === 'evaluating') {
+      setNoteWarnings(['Gemini Decision 1 triage is still running. Please wait a moment.']);
+      return;
+    }
+
+    if (decisionTriage.status === 'blocked') {
+      setNoteWarnings(decisionTriage.result.blockingReasons);
+      return;
+    }
 
     if (optionalNote.trim()) {
       const check = checkPiiAndGuardrails(optionalNote);
@@ -797,10 +879,12 @@ export function App() {
     if (!file) return;
 
     const rejectPhotoWithError = (message: string) => {
+      triageAbortRef.current?.abort();
       setOptionalPhotoPreview(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+      setDecisionTriage({ status: 'idle' });
       setNoteWarnings([message]);
     };
 
@@ -817,6 +901,7 @@ export function App() {
         .then((strippedDataUrl) => {
           setNoteWarnings([]);
           setOptionalPhotoPreview(strippedDataUrl);
+          runPhotoAndNoteDecisionTriage(strippedDataUrl, optionalNote);
         })
         .catch((err) => {
           rejectPhotoWithError(
@@ -836,6 +921,8 @@ export function App() {
 
   const handleUndoLastDrop = () => {
     if (!lastLoggedReport) return;
+    triageAbortRef.current?.abort();
+    setDecisionTriage({ status: 'idle' });
     const reportId = lastLoggedReport.id;
     setReports((prev) => prev.filter((r) => r.id !== reportId));
     setLastLoggedReport(null);
@@ -2274,7 +2361,7 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                           onChange={handlePhotoFileChange}
                           className="hidden"
                         />
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 flex-wrap">
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
@@ -2286,11 +2373,20 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                             <span>{optionalPhotoPreview ? 'Change Photo' : 'Attach Photo'}</span>
                           </button>
                           {optionalPhotoPreview && (
-                            <img
-                              src={optionalPhotoPreview}
-                              alt="Attached fouling evidence preview"
-                              className="w-12 h-12 rounded-lg object-cover border border-line"
-                            />
+                            <>
+                              <img
+                                src={optionalPhotoPreview}
+                                alt="Attached fouling evidence preview"
+                                className="w-12 h-12 rounded-lg object-cover border border-line"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleClearOptionalPhoto}
+                                className="px-2.5 py-1.5 rounded-xl bg-canvas hover:bg-surface-container border border-line text-xs font-semibold text-muted hover:text-ink"
+                              >
+                                Remove Photo
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -2311,10 +2407,123 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                           rows={2}
                           maxLength={140}
                           value={optionalNote}
-                          onChange={(e) => setOptionalNote(e.target.value)}
+                          onChange={(e) => {
+                            const nextNote = e.target.value;
+                            setOptionalNote(nextNote);
+                            if (noteWarnings.length > 0) {
+                              setNoteWarnings([]);
+                            }
+                            if (!optionalPhotoPreview && decisionTriage.status === 'blocked') {
+                              setDecisionTriage({ status: 'idle' });
+                            }
+                          }}
                           placeholder="e.g., Right on the buggy ramp beside the bin..."
                           className="w-full rounded-xl border border-line px-3 py-2 text-xs text-ink"
                         />
+                      </div>
+
+                      {/* Gemini Decision 1 Multimodal Triage & Guardrail Panel */}
+                      <div
+                        data-agent-surface="gemini-decision-triage"
+                        className="p-3 rounded-xl border border-line bg-canvas space-y-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-ink flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-sm text-primary">
+                              verified_user
+                            </span>
+                            <span>Gemini Decision 1 Triage</span>
+                          </span>
+                          {(optionalPhotoPreview || optionalNote.trim()) &&
+                            decisionTriage.status !== 'evaluating' && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  runPhotoAndNoteDecisionTriage(optionalPhotoPreview, optionalNote)
+                                }
+                                className="px-2.5 py-1 rounded-lg bg-white border border-line hover:border-primary text-[11px] font-semibold text-primary"
+                              >
+                                Run AI Check
+                              </button>
+                            )}
+                        </div>
+
+                        {decisionTriage.status === 'idle' && (
+                          <p className="text-[11px] text-muted leading-snug">
+                            Attach a photo or add a note to evaluate civic relevance, GDPR/privacy
+                            safety, and footpath hazard score in one pass.
+                          </p>
+                        )}
+
+                        {decisionTriage.status === 'unconfigured' && (
+                          <p className="text-[11px] text-muted leading-snug">
+                            Local EXIF stripping and Node N13 GDPR regex guardrails active (set{' '}
+                            <code className="font-mono">VITE_GEMINI_API_KEY</code> for live{' '}
+                            <code className="font-mono">gemini-decision-1</code> multimodal scoring).
+                          </p>
+                        )}
+
+                        {decisionTriage.status === 'evaluating' && (
+                          <p
+                            role="status"
+                            className="text-[11px] font-semibold text-primary animate-pulse"
+                          >
+                            Evaluating with Gemini Decision 1 (zero output tokens)...
+                          </p>
+                        )}
+
+                        {decisionTriage.status === 'verified' && (
+                          <div className="space-y-1.5 pt-0.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-primary">
+                                ✓ Verified Civic Report ({Math.round(decisionTriage.result.civicIssueProb * 100)}%)
+                              </span>
+                              <span className="font-semibold text-ink">
+                                Privacy Safe: {Math.round(decisionTriage.result.privacySafeProb * 100)}%
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-[11px] text-muted">
+                              <span>
+                                Suggested:{' '}
+                                <strong className="text-ink">
+                                  {SEVERITY_META[decisionTriage.result.recommendedSeverity].emoji}{' '}
+                                  {SEVERITY_META[decisionTriage.result.recommendedSeverity].shortLabel}
+                                </strong>
+                              </span>
+                              <span>
+                                Hazard Rubric:{' '}
+                                <strong className="text-ink">
+                                  {decisionTriage.result.hazardScore.toFixed(1)} / 5.0
+                                </strong>
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {decisionTriage.status === 'blocked' && (
+                          <div className="space-y-1 text-[11px] text-error font-semibold">
+                            <p>
+                              Blocked by Gemini Decision 1 Guardrail (Civic:{' '}
+                              {Math.round(decisionTriage.result.civicIssueProb * 100)}% · Privacy:{' '}
+                              {Math.round(decisionTriage.result.privacySafeProb * 100)}%)
+                            </p>
+                          </div>
+                        )}
+
+                        {decisionTriage.status === 'error' && (
+                          <div className="flex items-center justify-between gap-2 text-[11px] text-amber-900">
+                            <span>{decisionTriage.message}</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                runPhotoAndNoteDecisionTriage(optionalPhotoPreview, optionalNote)
+                              }
+                              className="underline font-semibold shrink-0"
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       {noteWarnings.length > 0 && (
@@ -2328,7 +2537,11 @@ ${residentSignOff || 'A concerned Greystones resident'}`;
                       <div className="flex items-center gap-2 pt-1">
                         <button
                           type="submit"
-                          className="flex-1 py-2.5 bg-primary text-white rounded-xl text-xs font-bold"
+                          disabled={
+                            decisionTriage.status === 'evaluating' ||
+                            decisionTriage.status === 'blocked'
+                          }
+                          className="flex-1 py-2.5 bg-primary disabled:opacity-50 text-white rounded-xl text-xs font-bold"
                         >
                           Save Details
                         </button>

@@ -31,6 +31,13 @@ import {
 import { PublicBin } from '../types';
 import { isValidCrowdsourcedReport } from '../utils/firebaseSync';
 import { computeDailySnapshots, formatDublinDate } from '../utils/reconciliation';
+import {
+  GEMINI_DECISIONS_ENDPOINT,
+  GEMINI_DECISION_MODEL,
+  buildCivicReportDecisionRequest,
+  evaluateCivicReportDecision,
+  parseCivicReportDecisionResponse,
+} from '../utils/geminiDecision';
 
 describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
   it('computes accurate Haversine distance in metres for South Beach Promenade pins near Bin #G-14', () => {
@@ -430,6 +437,193 @@ describe('Clean Greystones Graph Engine & Bin Proximity Suite', () => {
       },
     ]);
     assert.ok(snapshots['2026-07-16'], 'Late-evening IST report must bucket into the local Dublin date');
+  });
+
+  it('builds structured Gemini Decision 1 multimodal requests and rejects non-JPEG image payloads', () => {
+    const req = buildCivicReportDecisionRequest({
+      photoDataUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==',
+      note: 'Right beside Bin #G-14 on promenade',
+      streetName: 'South Beach Promenade (near Lifeguard Hut)',
+      areaName: 'South Beach Prom',
+      dBinAllM: 8,
+      currentSeverity: 'buggy_wheels',
+    });
+
+    assert.equal(req.model, GEMINI_DECISION_MODEL);
+    assert.equal(Array.isArray(req.input), true);
+    const parts = req.input as Array<{ type?: string; text?: string; inline_data?: { mime_type: string; data: string } }>;
+    assert.equal(parts.length, 2);
+    assert.ok(parts[0].text?.includes('South Beach Promenade'));
+    assert.equal(parts[1].inline_data?.mime_type, 'image/jpeg');
+    assert.equal(parts[1].inline_data?.data, '/9j/4AAQSkZJRgABAQ==');
+
+    assert.equal(req.questions.is_civic_issue.type, 'noul');
+    assert.equal(req.questions.privacy_safe.type, 'noul');
+    assert.equal(req.questions.recommended_severity.type, 'choice');
+    assert.equal(req.questions.hazard_rubric.type, 'score');
+    assert.equal(req.questions.hazard_rubric.criteria.length, 5);
+
+    assert.throws(
+      () =>
+        buildCivicReportDecisionRequest({
+          photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+        }),
+      /must be a stripped JPEG data URL/i
+    );
+  });
+
+  it('parses Gemini Decision 1 responses, enforces civic & GDPR thresholds, and combines Node N13 text guardrails', () => {
+    const validApiPayload = {
+      answers: {
+        is_civic_issue: { type: 'noul', noul: 0.96, confidence: 0.98 },
+        privacy_safe: { type: 'noul', noul: 0.99, confidence: 0.99 },
+        recommended_severity: {
+          type: 'choice',
+          choice: 'buggy_wheels',
+          probabilities: {
+            just_poop: 0.08,
+            stepped_in: 0.12,
+            buggy_wheels: 0.75,
+            wheelchair_wheels: 0.05,
+          },
+          confidence: 0.92,
+        },
+        hazard_rubric: {
+          type: 'score',
+          score: 4.1,
+          confidence: 0.9,
+        },
+      },
+      usage: {
+        total_input_tokens: 312,
+        total_output_tokens: 0,
+        total_tokens: 312,
+      },
+    };
+
+    // 1. Clean civic photo & note passes
+    const verified = parseCivicReportDecisionResponse(
+      validApiPayload,
+      'Buggy wheel rolled through mess 6m from bin'
+    );
+    assert.equal(verified.allowedToPublish, true);
+    assert.equal(verified.isCivicIssue, true);
+    assert.equal(verified.isPrivacySafe, true);
+    assert.equal(verified.recommendedSeverity, 'buggy_wheels');
+    assert.equal(verified.hazardScore, 4.1);
+    assert.equal(verified.blockingReasons.length, 0);
+    assert.equal(verified.totalInputTokens, 312);
+
+    // 2. Clean photo but note contains vehicle registration plate -> blocked by defense-in-depth Node N13 check
+    const blockedByNotePii = parseCivicReportDecisionResponse(
+      validApiPayload,
+      'Owner drove away in 241-WW-1928'
+    );
+    assert.equal(blockedByNotePii.allowedToPublish, false);
+    assert.equal(blockedByNotePii.isPrivacySafe, false);
+    assert.ok(blockedByNotePii.blockingReasons.some((r) => r.includes('Vehicle registration')));
+
+    // 3. Visual PII detected in photo (privacy_safe < 0.6) -> blocked
+    const blockedByVisualPii = parseCivicReportDecisionResponse({
+      ...validApiPayload,
+      answers: {
+        ...validApiPayload.answers,
+        privacy_safe: { type: 'noul', noul: 0.15, confidence: 0.95 },
+      },
+    });
+    assert.equal(blockedByVisualPii.allowedToPublish, false);
+    assert.equal(blockedByVisualPii.isPrivacySafe, false);
+    assert.ok(blockedByVisualPii.blockingReasons.some((r) => r.includes('Privacy & GDPR guardrail')));
+
+    // 4. Non-civic spam image (is_civic_issue < 0.5) -> blocked
+    const blockedNonCivic = parseCivicReportDecisionResponse({
+      ...validApiPayload,
+      answers: {
+        ...validApiPayload.answers,
+        is_civic_issue: { type: 'noul', noul: 0.12, confidence: 0.97 },
+      },
+    });
+    assert.equal(blockedNonCivic.allowedToPublish, false);
+    assert.equal(blockedNonCivic.isCivicIssue, false);
+
+    // 5. Malformed payload missing answers throws
+    assert.throws(
+      () => parseCivicReportDecisionResponse({ invalid: true }),
+      /top-level "answers" object is missing/i
+    );
+  });
+
+  it('executes evaluateCivicReportDecision over HTTP and surfaces missing API key or upstream HTTP errors cleanly', async () => {
+    // 1. Missing API key rejects explicitly without stubbing fake scores
+    await assert.rejects(
+      async () => {
+        await evaluateCivicReportDecision(
+          { note: 'Test note' },
+          { apiKey: '' }
+        );
+      },
+      /VITE_GEMINI_API_KEY is not configured/i
+    );
+
+    // 2. Successful call sends POST to /v1beta/decisions with x-goog-api-key header
+    let capturedUrl = '';
+    let capturedHeaders: Record<string, string> = {};
+    const mockFetchSuccess = (async (url: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      return new Response(
+        JSON.stringify({
+          answers: {
+            is_civic_issue: { type: 'noul', noul: 0.94, confidence: 0.95 },
+            privacy_safe: { type: 'noul', noul: 0.98, confidence: 0.97 },
+            recommended_severity: {
+              type: 'choice',
+              choice: 'stepped_in',
+              probabilities: {
+                just_poop: 0.1,
+                stepped_in: 0.8,
+                buggy_wheels: 0.05,
+                wheelchair_wheels: 0.05,
+              },
+              confidence: 0.9,
+            },
+            hazard_rubric: { type: 'score', score: 3.8, confidence: 0.88 },
+          },
+          usage: { total_input_tokens: 245, total_output_tokens: 0, total_tokens: 245 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as typeof fetch;
+
+    const res = await evaluateCivicReportDecision(
+      {
+        photoDataUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==',
+        note: 'Stepped in on footpath',
+      },
+      { apiKey: 'test-gemini-key-123', fetchFn: mockFetchSuccess }
+    );
+    assert.equal(capturedUrl, GEMINI_DECISIONS_ENDPOINT);
+    assert.equal(capturedHeaders['x-goog-api-key'], 'test-gemini-key-123');
+    assert.equal(res.allowedToPublish, true);
+    assert.equal(res.recommendedSeverity, 'stepped_in');
+
+    // 3. Upstream HTTP 403/500 surfaces error message
+    const mockFetchError = (async () => {
+      return new Response(
+        JSON.stringify({ error: { message: 'API key not valid. Please pass a valid API key.' } }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as typeof fetch;
+
+    await assert.rejects(
+      async () => {
+        await evaluateCivicReportDecision(
+          { note: 'Test note' },
+          { apiKey: 'invalid-key', fetchFn: mockFetchError }
+        );
+      },
+      /API key not valid/i
+    );
   });
 });
 
