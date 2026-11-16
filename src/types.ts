@@ -223,3 +223,27 @@ export interface ProductMetricsSummary {
   nearBin50mPct: number;
 }
 
+export interface CivicDecisionTriageSummary {
+  model: 'gemini-decision-1';
+  allowedToPublish: boolean;
+  isCivicIssue: boolean;
+  civicIssueProb: number;
+  isPrivacySafe: boolean;
+  privacySafeProb: number;
+  recommendedSeverity: SeverityType;
+  severityProbabilities: Record<SeverityType, number>;
+  hazardScore: number; // 1.0 to 5.0 expected score across ordered rubric
+  confidence: number;
+  blockingReasons: string[];
+  totalInputTokens: number;
+}
+
+export type DecisionTriageState =
+  | { status: 'idle' }
+  | { status: 'unconfigured' }
+  | { status: 'evaluating' }
+  | { status: 'verified'; result: CivicDecisionTriageSummary }
+  | { status: 'blocked'; result: CivicDecisionTriageSummary }
+  | { status: 'error'; message: string };
+
+
